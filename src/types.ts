@@ -101,6 +101,8 @@ export interface ReviewFileInput {
 }
 
 export interface ReviewRequest {
+  task_id: string;
+  workspace: string;
   files: ReviewFileInput[];
   cfg: GatewayConfig;
   concurrency: number;
@@ -125,6 +127,7 @@ export interface ReviewSummary {
   conditional: number;
   block: number;
   fail: number;
+  cancelled: boolean;
 }
 
 export interface TaskSummary {
@@ -151,4 +154,37 @@ export interface Defaults {
   systems: SystemType[];
   templates: Template[];
   rule_sets: RuleSet[];
+}
+
+/** 应用配置（Rust `AppConfig`）；不含 API Key。 */
+export interface AppConfig {
+  base_url: string;
+  model: string;
+  allow_http: boolean;
+  timeout_secs: number;
+  concurrency: number;
+  max_file_mb: number;
+  max_files: number;
+  chunk_threshold: number;
+  chunk_size: number;
+  history_retention_days: number;
+  systems: SystemType[];
+  templates: Template[];
+  rule_sets: RuleSet[];
+}
+
+export interface ExportRow {
+  system: string;
+  file: string;
+  file_type: string;
+  rule: string;
+  verdict: string;
+  citations: string;
+  time: string;
+}
+
+export interface SystemFileSummary {
+  file: string;
+  verdict: string;
+  risks: string[];
 }

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -60,7 +62,12 @@ pub async fn chat(cfg: &GatewayConfig, user_content: &str) -> Result<String, Str
 }
 
 /// 流式请求；每个正文增量回调一次，返回拼接后的完整正文。
-pub async fn chat_stream<F>(cfg: &GatewayConfig, user_content: &str, mut on_delta: F) -> Result<String, String>
+pub async fn chat_stream<F>(
+    cfg: &GatewayConfig,
+    user_content: &str,
+    cancel: Option<Arc<AtomicBool>>,
+    mut on_delta: F,
+) -> Result<String, String>
 where
     F: FnMut(&str) + Send,
 {
@@ -90,6 +97,11 @@ where
     let mut saw_event = false;
 
     while let Some(chunk) = stream.next().await {
+        if let Some(flag) = &cancel {
+            if flag.load(Ordering::Relaxed) {
+                return Err("任务已取消".into());
+            }
+        }
         let bytes = chunk.map_err(|e| format!("读取模型流失败：{e}"))?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
         while let Some(pos) = buffer.find('\n') {

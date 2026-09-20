@@ -1,17 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  Defaults,
+  AppConfig,
+  ExportRow,
   GatewayConfig,
   ReviewRequest,
   ReviewSummary,
   RuleSet,
   ScanResult,
+  SystemFileSummary,
   TaskDetail,
   TaskSummary,
   Template,
 } from "./types";
 
-export const getDefaults = () => invoke<Defaults>("get_defaults");
+export const loadConfig = () => invoke<AppConfig>("load_config");
+
+export const saveSettings = (config: AppConfig, apiKey?: string) =>
+  invoke<void>("save_settings", { config, apiKey: apiKey ?? null });
+
+export const hasApiKey = () => invoke<boolean>("has_api_key");
+
+export const clearApiKey = () => invoke<void>("clear_api_key");
 
 export const scanDirectory = (args: {
   path: string;
@@ -30,11 +39,37 @@ export const scanUploads = (args: {
   chunkSize: number;
 }) => invoke<ScanResult>("scan_uploads", args);
 
-export const testConnection = (cfg: GatewayConfig) =>
-  invoke<string>("test_connection", { cfg });
+export const scanText = (args: {
+  content: string;
+  system: string;
+  templateId: string;
+  ruleSet: RuleSet;
+  threshold: number;
+  chunkSize: number;
+}) => invoke<ScanResult>("scan_text", args);
 
-export const runReview = (request: ReviewRequest) =>
-  invoke<ReviewSummary>("run_review", { request });
+export const testConnection = (cfg: GatewayConfig, apiKey?: string) =>
+  invoke<string>("test_connection", { cfg, apiKey: apiKey ?? null });
+
+export const cancelReview = (taskId: string) => invoke<void>("cancel_review", { taskId });
+
+export const runReview = (request: ReviewRequest) => invoke<ReviewSummary>("run_review", { request });
+
+export const summarizeSystem = (args: {
+  cfg: GatewayConfig;
+  apiKey?: string;
+  systemName: string;
+  files: SystemFileSummary[];
+}) =>
+  invoke<string>("summarize_system", {
+    cfg: args.cfg,
+    apiKey: args.apiKey ?? null,
+    systemName: args.systemName,
+    files: args.files,
+  });
+
+export const exportXlsx = (path: string, rows: ExportRow[]) =>
+  invoke<void>("export_xlsx", { path, rows });
 
 export const saveTask = (args: {
   sourceType: string;

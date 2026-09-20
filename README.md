@@ -17,22 +17,30 @@ Apollo / XXL-JOB / 星云 等来源，调用内网文本 LLM 网关做上线前�
 ```bash
 npm install
 npm run tauri dev      # 桌面应用
-npm run build          # 仅前端构建（tsc + vite）
-cd src-tauri && cargo check
+npm run typecheck      # 前端类型检查
+npm run build          # 前端构建（tsc + vite）
+npm run check:rust     # Rust 检查
 ```
 
-## 当前进度（首版里程碑）
+Windows 安装包由 GitHub Actions 构建：推送 tag（`v*`）或手动触发
+[`build-windows`](.github/workflows/build-windows.yml)，产物在 workflow 的
+`config-reviewer-windows` artifact 中（NSIS `.exe` 与 `.msi`）。
 
-- [x] 项目脚手架与 Private Banking 主题
-- [x] Rust：扫描 / ZIP 解压 / 解析（JSON、Excel、Word、文本，UTF-8/GB18030）/ 规则路由 / 分块
-- [x] Rust：OpenAI 兼容网关（流式 + 一次性）与结论/引用解析
-- [x] Rust：SQLite 历史（任务 + 文件级结果）
-- [x] 前端：四步向导、按系统分组结果、历史、模板、模型设置
-- [ ] 模板/规则集持久化（当前为会话内内存）
-- [ ] Windows DPAPI 加密 API Key（当前为本地存储）
-- [ ] 导出 Excel / HTML、按系统 LLM 汇总、任务取消
+## 功能状态
+
+- [x] 扫描来源：ZIP / 多文件上传、本地目录递归扫描、粘贴文本
+- [x] 通用解析：JSON、Excel（全 Sheet）、Word（段落 + 表格）、文本；UTF-8 / GB18030 回退
+- [x] 规则路由：glob → 归属系统 + 评审模板，预置可改、可增删、可持久化
+- [x] 大文件分块（JSON 顶层键优先）与 LLM 合并为文件结论
+- [x] 内网 OpenAI 兼容网关（流式 + 一次性），并发可配、可取消
+- [x] 按系统分组结果、结构化引用、每系统 LLM 汇总
+- [x] 导出 Excel（`系统|文件路径|文件类型|命中规则|结论|引用|时间`）/ JSON / Markdown / HTML
+- [x] 本机 SQLite 历史（任务 + 文件级结果）
+- [x] 配置持久化、API Key 通过系统凭据库加密（Windows 凭据管理器 / macOS Keychain）
+- [x] Windows 安装包 CI
 
 ## 尚未确定的事实输入
 
 - 预置文件名规则清单（需业务样例）
 - 内网网关契约细节（模型名、上下文上限、限流/错误码）
+

@@ -131,6 +131,9 @@ fn default_timeout() -> u64 {
 /// 分析请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewRequest {
+    pub task_id: String,
+    #[serde(default)]
+    pub workspace: String,
     pub files: Vec<ReviewFileInput>,
     pub cfg: GatewayConfig,
     #[serde(default)]

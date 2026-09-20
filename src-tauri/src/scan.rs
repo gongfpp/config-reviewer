@@ -14,6 +14,7 @@ pub struct ScanOptions {
     pub matched_only: bool,
     pub threshold: usize,
     pub chunk_size: usize,
+    pub max_file_bytes: u64,
 }
 
 /// 扫描本地目录（普通文件原地读取，ZIP 解压到工作区后再扫描）。
@@ -122,7 +123,13 @@ fn build_entry(abs: &Path, rel: &str, rule_set: &RuleSet, opts: &ScanOptions) ->
     let mut text_len = 0usize;
     let mut chunks = 0usize;
 
-    if matched {
+    if matched && size > opts.max_file_bytes {
+        parse_status = "error".into();
+        parse_error = Some(format!(
+            "超过单文件上限（{:.0} MB）",
+            opts.max_file_bytes as f64 / 1024.0 / 1024.0
+        ));
+    } else if matched {
         match parse_file(abs, &kind, opts.threshold, opts.chunk_size) {
             Ok(parsed) => {
                 parse_status = "ok".into();
@@ -149,7 +156,7 @@ fn build_entry(abs: &Path, rel: &str, rule_set: &RuleSet, opts: &ScanOptions) ->
         rule_id,
         template_id,
         matched,
-        selected: matched,
+        selected: matched && parse_status == "ok",
         chunks,
         parse_status,
         parse_error,

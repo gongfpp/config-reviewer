@@ -1,36 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 import * as api from "./api";
 import type {
-  Defaults,
+  AppConfig,
+  ExportRow,
   FileResult,
   GatewayConfig,
   ReviewFileInput,
   ReviewProgress,
   ReviewSummary,
-  RuleSet,
   ScanEntry,
   ScanResult,
+  SystemFileSummary,
   TaskDetail,
   TaskSummary,
   Template,
 } from "./types";
 
 type View = "task" | "history" | "templates" | "settings";
-
-const SETTINGS_KEY = "reviewer.settings";
-
-function loadSettings(): GatewayConfig {
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { allow_http: true, timeout_secs: 180, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return { base_url: "", model: "", api_key: "", allow_http: true, timeout_secs: 180 };
-}
 
 function kindLabel(kind: string) {
   switch (kind) {
@@ -61,52 +50,55 @@ function verdictClass(verdict: string) {
 }
 
 export default function App() {
-  const [defaults, setDefaults] = useState<Defaults | null>(null);
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [view, setView] = useState<View>("task");
-  const [ruleSet, setRuleSet] = useState<RuleSet | null>(null);
+  const [activeRuleSetId, setActiveRuleSetId] = useState("");
 
   const [source, setSource] = useState<"upload" | "dir" | "text">("upload");
   const [uploadPaths, setUploadPaths] = useState<string[]>([]);
   const [dirPath, setDirPath] = useState("");
   const [recursive, setRecursive] = useState(true);
   const [matchedOnly, setMatchedOnly] = useState(true);
+  const [textContent, setTextContent] = useState("");
+  const [textSystem, setTextSystem] = useState("xxl");
+  const [textTemplate, setTextTemplate] = useState("tpl-xxl");
 
   const [step, setStep] = useState(1);
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
   const [preview, setPreview] = useState("选择文件可预览解析后的文本…");
 
-  const [cfg, setCfg] = useState<GatewayConfig>(loadSettings);
-  const [concurrency, setConcurrency] = useState(3);
-  const [threshold, setThreshold] = useState(12000);
-  const [chunkSize, setChunkSize] = useState(8000);
+  const [apiKey, setApiKey] = useState("");
+  const [hasKey, setHasKey] = useState(false);
 
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Record<number, { file: string; phase: string; text: string }>>({});
   const [results, setResults] = useState<FileResult[]>([]);
   const [summary, setSummary] = useState<ReviewSummary | null>(null);
   const [detail, setDetail] = useState<FileResult | null>(null);
+  const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
 
   const [history, setHistory] = useState<TaskSummary[]>([]);
   const [historyDetail, setHistoryDetail] = useState<TaskDetail | null>(null);
-
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
+
   const noticeTimer = useRef<number | null>(null);
 
   const toast = useCallback((message: string) => {
     setNotice(message);
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-    noticeTimer.current = window.setTimeout(() => setNotice(""), 2200);
+    noticeTimer.current = window.setTimeout(() => setNotice(""), 2400);
   }, []);
 
   useEffect(() => {
-    api
-      .getDefaults()
-      .then((d) => {
-        setDefaults(d);
-        setRuleSet(d.rule_sets[0] ?? null);
-        setEditingTemplate(d.templates[0] ?? null);
+    Promise.all([api.loadConfig(), api.hasApiKey()])
+      .then(([cfg, key]) => {
+        setAppConfig(cfg);
+        setActiveRuleSetId(cfg.rule_sets[0]?.id ?? "");
+        setEditingTemplate(cfg.templates[0] ?? null);
+        setTextSystem(cfg.systems[1]?.id ?? cfg.systems[0]?.id ?? "other");
+        setHasKey(key);
       })
       .catch((e) => toast(String(e)));
   }, [toast]);
@@ -154,15 +146,24 @@ export default function App() {
     };
   }, []);
 
-  const systems = defaults?.systems ?? [];
-  const templates = defaults?.templates ?? [];
+  const systems = appConfig?.systems ?? [];
+  const templates = appConfig?.templates ?? [];
+  const ruleSet = useMemo(
+    () => appConfig?.rule_sets.find((r) => r.id === activeRuleSetId) ?? appConfig?.rule_sets[0] ?? null,
+    [appConfig, activeRuleSetId]
+  );
   const systemName = (id: string | null) => systems.find((s) => s.id === id)?.name ?? id ?? "—";
   const systemClass = (id: string | null) => id ?? "other";
 
-  const saveSettings = (next: GatewayConfig) => {
-    setCfg(next);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-  };
+  const gatewayCfg = (): GatewayConfig => ({
+    base_url: appConfig?.base_url ?? "",
+    model: appConfig?.model ?? "",
+    api_key: "",
+    allow_http: appConfig?.allow_http ?? true,
+    timeout_secs: appConfig?.timeout_secs ?? 180,
+  });
+
+  const updateConfig = (patch: Partial<AppConfig>) => setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
 
   const pickFiles = async () => {
     const selected = await open({ multiple: true, directory: false });
@@ -176,7 +177,7 @@ export default function App() {
   };
 
   const doScan = async () => {
-    if (!ruleSet) return;
+    if (!ruleSet || !appConfig) return;
     setScanning(true);
     try {
       let result: ScanResult;
@@ -187,14 +188,28 @@ export default function App() {
           ruleSet,
           recursive,
           matchedOnly,
-          threshold,
-          chunkSize,
+          threshold: appConfig.chunk_threshold,
+          chunkSize: appConfig.chunk_size,
         });
       } else if (source === "upload") {
         if (uploadPaths.length === 0) throw new Error("请先选择文件或 ZIP");
-        result = await api.scanUploads({ paths: uploadPaths, ruleSet, matchedOnly, threshold, chunkSize });
+        result = await api.scanUploads({
+          paths: uploadPaths,
+          ruleSet,
+          matchedOnly,
+          threshold: appConfig.chunk_threshold,
+          chunkSize: appConfig.chunk_size,
+        });
       } else {
-        throw new Error("粘贴文本模式将在后续版本接入");
+        if (!textContent.trim()) throw new Error("请先粘贴内容");
+        result = await api.scanText({
+          content: textContent,
+          system: textSystem,
+          templateId: textTemplate,
+          ruleSet,
+          threshold: appConfig.chunk_threshold,
+          chunkSize: appConfig.chunk_size,
+        });
       }
       setScan(result);
       setStep(2);
@@ -208,16 +223,14 @@ export default function App() {
 
   const updateEntry = (path: string, patch: Partial<ScanEntry>) => {
     setScan((prev) =>
-      prev
-        ? { ...prev, entries: prev.entries.map((e) => (e.path === path ? { ...e, ...patch } : e)) }
-        : prev
+      prev ? { ...prev, entries: prev.entries.map((e) => (e.path === path ? { ...e, ...patch } : e)) } : prev
     );
   };
 
   const selectedEntries = useMemo(() => (scan ? scan.entries.filter((e) => e.selected && e.matched) : []), [scan]);
 
   const startReview = async () => {
-    if (!scan || !ruleSet) return;
+    if (!scan || !appConfig || !ruleSet) return;
     const files: ReviewFileInput[] = selectedEntries.map((e) => ({
       path: e.path,
       abs_path: e.abs_path,
@@ -235,9 +248,18 @@ export default function App() {
     setRunning(true);
     setResults([]);
     setSummary(null);
+    setSummaries({});
     setProgress({});
     try {
-      const result = await api.runReview({ files, cfg, concurrency, chunk_threshold: threshold, chunk_size: chunkSize });
+      const result = await api.runReview({
+        task_id: scan.task_id,
+        workspace: scan.workspace,
+        files,
+        cfg: gatewayCfg(),
+        concurrency: appConfig.concurrency,
+        chunk_threshold: appConfig.chunk_threshold,
+        chunk_size: appConfig.chunk_size,
+      });
       setSummary(result);
       setResults(result.results);
       await api.saveTask({
@@ -248,7 +270,7 @@ export default function App() {
         summary: result,
       });
       refreshHistory();
-      toast("评审完成，已保存到本机历史");
+      toast(result.cancelled ? "已取消，部分结果已保存" : "评审完成，已保存到本机历史");
     } catch (e) {
       toast(String(e));
     } finally {
@@ -256,33 +278,95 @@ export default function App() {
     }
   };
 
-  const exportCurrent = (format: "json" | "markdown") => {
-    const rows = results;
-    if (rows.length === 0) {
-      toast("没有可导出的结果");
-      return;
+  const cancelReview = async () => {
+    if (scan) await api.cancelReview(scan.task_id);
+    toast("已请求取消，等待当前请求结束…");
+  };
+
+  const exportJson = () => {
+    if (results.length === 0) return toast("没有可导出的结果");
+    download(`review-${Date.now()}.json`, JSON.stringify(results, null, 2), "application/json");
+  };
+
+  const exportMarkdown = () => {
+    if (results.length === 0) return toast("没有可导出的结果");
+    const content = buildMarkdown();
+    download(`review-${Date.now()}.md`, content, "text/markdown");
+  };
+
+  const buildMarkdown = () =>
+    results
+      .map(
+        (r) =>
+          `## ${r.file}\n\n- 系统：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
+            .map((b) => `- ${b}`)
+            .join("\n")}\n\n### 风险\n${r.risks.map((b) => `- ${b}`).join("\n")}\n\n### 整改项\n${r.remediations
+            .map((b) => `- ${b}`)
+            .join("\n")}\n\n### 引用\n${r.citations.map((c) => `> ${c.file} · ${c.locator} · ${c.snippet}`).join("\n")}\n`
+      )
+      .join("\n---\n\n");
+
+  const exportHtml = () => {
+    if (results.length === 0) return toast("没有可导出的结果");
+    const rows = results
+      .map(
+        (r) =>
+          `<section><h2>${escapeHtml(r.file)}</h2><p class="meta">${systemName(r.system)} · <b class="${verdictClass(
+            r.verdict
+          )}">${r.verdict}</b>${r.chunks > 1 ? ` · ${r.chunks} 块合并` : ""}</p>
+           <h3>依据</h3><ul>${r.basis.map((b) => `<li>${escapeHtml(b)}</li>`).join("") || "<li>无</li>"}</ul>
+           <h3>风险</h3><ul>${r.risks.map((b) => `<li>${escapeHtml(b)}</li>`).join("") || "<li>无</li>"}</ul>
+           <h3>整改项</h3><ul>${r.remediations.map((b) => `<li>${escapeHtml(b)}</li>`).join("") || "<li>无</li>"}</ul>
+           ${
+             r.citations.length
+               ? `<h3>引用</h3>${r.citations
+                   .map((c) => `<blockquote>${escapeHtml(c.file)} · ${escapeHtml(c.locator)} · ${escapeHtml(c.snippet)}</blockquote>`)
+                   .join("")}`
+               : ""
+           }</section>`
+      )
+      .join("");
+    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>配置评审报告</title>
+      <style>body{font:14px/1.7 -apple-system,"Microsoft YaHei UI",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#1c2431}
+      h1{font-family:Georgia,serif}h2{font-family:Georgia,serif;border-bottom:1px solid #e3dccd;padding-bottom:6px;margin-top:32px}
+      h3{margin:14px 0 6px;font-size:14px;color:#3d6240}.meta{color:#7d7666;font-size:12px}
+      .pass{color:#3d6240}.conditional{color:#a2762a}.block,.fail{color:#8f3b34}
+      blockquote{border-left:2px solid #b08d33;margin:4px 0;padding:4px 12px;color:#7d7666;font-family:monospace;font-size:12px}</style>
+      </head><body><h1>配置评审报告</h1><p class="meta">生成时间：${formatTime(Date.now())}</p>${rows}</body></html>`;
+    download(`review-${Date.now()}.html`, html, "text/html");
+  };
+
+  const exportExcel = async () => {
+    if (results.length === 0) return toast("没有可导出的结果");
+    const path = await save({
+      defaultPath: `review-${Date.now()}.xlsx`,
+      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+    });
+    if (!path) return;
+    const entryByPath = new Map((scan?.entries ?? []).map((e) => [e.path, e]));
+    const now = formatTime(Date.now());
+    const rows: ExportRow[] = results.map((r) => {
+      const entry = entryByPath.get(r.file);
+      return {
+        system: systemName(r.system),
+        file: r.file,
+        file_type: entry ? kindLabel(entry.kind) : "",
+        rule: entry?.rule_id ?? "",
+        verdict: r.verdict,
+        citations: r.citations.map((c) => `${c.locator} ${c.snippet}`).join("；"),
+        time: now,
+      };
+    });
+    try {
+      await api.exportXlsx(path, rows);
+      toast("已导出 Excel");
+    } catch (e) {
+      toast(String(e));
     }
-    let content = "";
-    let filename = `review-${Date.now()}`;
-    if (format === "json") {
-      content = JSON.stringify(rows, null, 2);
-      filename += ".json";
-    } else {
-      content = rows
-        .map(
-          (r) =>
-            `## ${r.file}\n\n- 系统：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
-              .map((b) => `- ${b}`)
-              .join("\n")}\n\n### 风险\n${r.risks.map((b) => `- ${b}`).join("\n")}\n\n### 整改项\n${r.remediations
-              .map((b) => `- ${b}`)
-              .join("\n")}\n\n### 引用\n${r.citations
-              .map((c) => `> ${c.file} · ${c.locator} · ${c.snippet}`)
-              .join("\n")}\n`
-        )
-        .join("\n---\n\n");
-      filename += ".md";
-    }
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  };
+
+  const download = (filename: string, content: string, type: string) => {
+    const blob = new Blob([content], { type: `${type};charset=utf-8` });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -291,10 +375,26 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const summarize = async (system: string) => {
+    const items = results.filter((r) => (r.system ?? "other") === system);
+    if (items.length === 0) return;
+    const files: SystemFileSummary[] = items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks }));
+    try {
+      const text = await api.summarizeSystem({
+        cfg: gatewayCfg(),
+        systemName: systemName(system),
+        files,
+      });
+      setSummaries((prev) => ({ ...prev, [system]: text }));
+      toast(`已生成 ${systemName(system)} 汇总`);
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
   const viewHistory = async (id: string) => {
     try {
-      const d = await api.getHistory(id);
-      setHistoryDetail(d);
+      setHistoryDetail(await api.getHistory(id));
     } catch (e) {
       toast(String(e));
     }
@@ -305,6 +405,20 @@ export default function App() {
       await api.deleteHistory(id);
       if (historyDetail?.summary.id === id) setHistoryDetail(null);
       refreshHistory();
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  const saveSettings = async () => {
+    if (!appConfig) return;
+    try {
+      await api.saveSettings(appConfig, apiKey || undefined);
+      if (apiKey) {
+        setHasKey(true);
+        setApiKey("");
+      }
+      toast("设置已保存");
     } catch (e) {
       toast(String(e));
     }
@@ -344,8 +458,8 @@ export default function App() {
           <div className="conn">
             <span className="dot" />
             <span>
-              <strong>{cfg.base_url ? "内网网关" : "未配置"}</strong>
-              {cfg.base_url ? " · 已配置" : " · 请设置"}
+              <strong>{appConfig?.base_url ? "内网网关" : "未配置"}</strong>
+              {appConfig?.base_url ? (hasKey ? " · 已就绪" : " · 缺 Key") : " · 请设置"}
             </span>
           </div>
           <div className="ver">v0.1.0 · Tauri</div>
@@ -373,7 +487,8 @@ export default function App() {
           </div>
         </header>
 
-        {view === "task" && (
+        {view === "task" && !appConfig && <section className="view"><div className="empty">正在加载配置…</div></section>}
+        {view === "task" && appConfig && (
           <section className="view">
             <div className="steps">
               {[
@@ -400,7 +515,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>选择评审来源</h2>
-                  <span className="hint">文件数 &lt; 800 · 单文件上限可配置</span>
+                  <span className="hint">文件数 &lt; {appConfig.max_files} · 单文件 ≤ {appConfig.max_file_mb} MB</span>
                 </div>
                 <div className="panel-body">
                   <div className="src-tabs">
@@ -426,11 +541,7 @@ export default function App() {
                           选择文件
                         </button>
                       </div>
-                      {uploadPaths.length > 0 && (
-                        <div className="preview-box" style={{ maxHeight: 120 }}>
-                          {uploadPaths.join("\n")}
-                        </div>
-                      )}
+                      {uploadPaths.length > 0 && <div className="preview-box" style={{ maxHeight: 120 }}>{uploadPaths.join("\n")}</div>}
                     </>
                   )}
 
@@ -452,10 +563,34 @@ export default function App() {
                   )}
 
                   {source === "text" && (
-                    <div className="field">
-                      <label>粘贴要评审的内容</label>
-                      <textarea placeholder="把配置或文档内容粘贴到这里…（后续版本接入）" />
-                    </div>
+                    <>
+                      <div className="field">
+                        <label>粘贴要评审的内容</label>
+                        <textarea value={textContent} onChange={(e) => setTextContent(e.target.value)} placeholder="把配置或文档内容粘贴到这里…" />
+                      </div>
+                      <div className="field-row">
+                        <div className="field">
+                          <label>归属系统</label>
+                          <select value={textSystem} onChange={(e) => setTextSystem(e.target.value)}>
+                            {systems.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="field">
+                          <label>评审模板</label>
+                          <select value={textTemplate} onChange={(e) => setTextTemplate(e.target.value)}>
+                            {templates.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </>
                   )}
 
                   <label className="checkline">
@@ -511,7 +646,7 @@ export default function App() {
                               <input
                                 type="checkbox"
                                 checked={e.selected}
-                                disabled={!e.matched}
+                                disabled={!e.matched || e.parse_status === "error"}
                                 onChange={(ev) => updateEntry(e.path, { selected: ev.target.checked })}
                               />
                             </td>
@@ -542,7 +677,19 @@ export default function App() {
                                 <span className="tag skip">跳过</span>
                               )}
                             </td>
-                            <td>{e.matched ? (e.chunks > 1 ? <span className="verdict conditional">{e.chunks} 块</span> : "1 块") : "—"}</td>
+                            <td>
+                              {e.matched ? (
+                                e.parse_status === "error" ? (
+                                  <span className="verdict fail">解析失败</span>
+                                ) : e.chunks > 1 ? (
+                                  <span className="verdict conditional">{e.chunks} 块</span>
+                                ) : (
+                                  "1 块"
+                                )
+                              ) : (
+                                "—"
+                              )}
+                            </td>
                             <td>
                               {e.matched && (
                                 <button
@@ -586,21 +733,21 @@ export default function App() {
                   <div className="field-row">
                     <div className="field">
                       <label>并发数</label>
-                      <input type="number" min={1} max={8} value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value) || 1)} />
+                      <input type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
                     </div>
                     <div className="field">
                       <label>模型</label>
-                      <input value={cfg.model || "未配置"} readOnly />
+                      <input value={appConfig.model || "未配置"} readOnly />
                     </div>
                   </div>
                   <div className="field-row">
                     <div className="field">
                       <label>分块触发阈值（字符）</label>
-                      <input type="number" value={threshold} onChange={(e) => setThreshold(Number(e.target.value) || 12000)} />
+                      <input type="number" value={appConfig.chunk_threshold} onChange={(e) => updateConfig({ chunk_threshold: Number(e.target.value) || 12000 })} />
                     </div>
                     <div className="field">
                       <label>单块大小（字符）</label>
-                      <input type="number" value={chunkSize} onChange={(e) => setChunkSize(Number(e.target.value) || 8000)} />
+                      <input type="number" value={appConfig.chunk_size} onChange={(e) => updateConfig({ chunk_size: Number(e.target.value) || 8000 })} />
                     </div>
                   </div>
                   <p className="muted" style={{ fontSize: 12 }}>
@@ -611,9 +758,15 @@ export default function App() {
                       ← 上一步
                     </button>
                     <span className="spacer" />
-                    <button className="btn btn-primary btn-lg" onClick={startReview} disabled={running || selectedEntries.length === 0}>
-                      {running ? "评审中…" : "开始评审"}
-                    </button>
+                    {running ? (
+                      <button className="btn btn-primary btn-lg" onClick={cancelReview}>
+                        取消评审
+                      </button>
+                    ) : (
+                      <button className="btn btn-primary btn-lg" onClick={startReview} disabled={selectedEntries.length === 0}>
+                        开始评审
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -625,7 +778,7 @@ export default function App() {
                   <div style={{ padding: 17 }}>
                     <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
                       <strong style={{ fontFamily: "var(--heading-font)", fontStyle: "italic" }}>
-                        {running ? "正在评审…" : "评审完成"}
+                        {running ? "正在评审…" : summary?.cancelled ? "已取消" : "评审完成"}
                       </strong>
                       <span className="muted" style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12 }}>
                         {doneCount} / {progressList.length || selectedEntries.length}
@@ -665,6 +818,11 @@ export default function App() {
                           <div className="group-head">
                             <span className={`sys ${sys}`}>{systemName(sys)}</span>
                             <h3>{items.length} 个文件</h3>
+                            <div className="right">
+                              <button className="link" onClick={() => summarize(sys)}>
+                                生成系统汇总
+                              </button>
+                            </div>
                           </div>
                           <table className="data">
                             <thead>
@@ -695,6 +853,13 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
+                          {summaries[sys] && (
+                            <div className="detail-body" style={{ borderTop: "1px solid var(--line)", whiteSpace: "pre-wrap" }}>
+                              <span className="k">系统汇总：</span>
+                              {"\n"}
+                              {summaries[sys]}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -762,14 +927,20 @@ export default function App() {
                       )}
                     </div>
                     <div className="panel-head" style={{ borderTop: "1px solid var(--line)", borderBottom: 0 }}>
-                      <h2>导出（简单版）</h2>
+                      <h2>导出</h2>
                     </div>
                     <div className="panel-body export-row">
-                      <button className="btn" onClick={() => exportCurrent("json")}>
+                      <button className="btn" onClick={exportExcel}>
+                        导出 Excel
+                      </button>
+                      <button className="btn" onClick={exportJson}>
                         导出 JSON
                       </button>
-                      <button className="btn" onClick={() => exportCurrent("markdown")}>
+                      <button className="btn" onClick={exportMarkdown}>
                         导出 Markdown
+                      </button>
+                      <button className="btn" onClick={exportHtml}>
+                        导出 HTML
                       </button>
                     </div>
                   </div>
@@ -815,7 +986,7 @@ export default function App() {
                     <tr key={h.id}>
                       <td>{formatTime(h.created_at)}</td>
                       <td>
-                        {h.source_type === "dir" ? "目录 · " : "文件 · "}
+                        {h.source_type === "dir" ? "目录 · " : h.source_type === "text" ? "文本 · " : "文件 · "}
                         {h.source_ref}
                       </td>
                       <td>
@@ -894,16 +1065,12 @@ export default function App() {
                 </div>
                 <div>
                   {templates.map((t) => (
-                    <div
-                      key={t.id}
-                      className={`tpl-item ${editingTemplate?.id === t.id ? "is-active" : ""}`}
-                      onClick={() => setEditingTemplate(t)}
-                    >
+                    <div key={t.id} className={`tpl-item ${editingTemplate?.id === t.id ? "is-active" : ""}`} onClick={() => setEditingTemplate(t)}>
                       <div>
                         <strong>{t.name}</strong>
                         <small>{t.content}</small>
                       </div>
-                      <span className="tag">{t.builtin ? "内置" : "自定义"}</span>
+                      <span className="tag">{t.builtin ? (t.overridden ? "已覆盖" : "内置") : "自定义"}</span>
                     </div>
                   ))}
                 </div>
@@ -911,26 +1078,37 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>编辑模板</h2>
+                  <div className="right">
+                    <button className="btn btn-sm" onClick={() => setEditingTemplate(templates[0] ?? null)}>
+                      恢复内置
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={async () => {
+                        if (!appConfig || !editingTemplate) return;
+                        const next = appConfig.templates.map((t) => (t.id === editingTemplate.id ? editingTemplate : t));
+                        updateConfig({ templates: next });
+                        await api.saveSettings({ ...appConfig, templates: next });
+                        toast("模板已保存");
+                      }}
+                    >
+                      保存
+                    </button>
+                  </div>
                 </div>
                 <div className="panel-body">
                   {editingTemplate ? (
                     <>
                       <div className="field">
                         <label>模板名称</label>
-                        <input
-                          value={editingTemplate.name}
-                          onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
-                        />
+                        <input value={editingTemplate.name} onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })} />
                       </div>
                       <div className="field">
                         <label>Prompt 内容</label>
-                        <textarea
-                          value={editingTemplate.content}
-                          onChange={(e) => setEditingTemplate({ ...editingTemplate, content: e.target.value })}
-                        />
+                        <textarea value={editingTemplate.content} onChange={(e) => setEditingTemplate({ ...editingTemplate, content: e.target.value })} />
                       </div>
                       <p className="muted" style={{ fontSize: 12 }}>
-                        模板编辑暂为本地会话内存；持久化在后继版本接入。
+                        内置模板可「另存覆盖」；保存后写入本机配置，参与后续评审。
                       </p>
                     </>
                   ) : (
@@ -942,7 +1120,7 @@ export default function App() {
           </section>
         )}
 
-        {view === "settings" && (
+        {view === "settings" && appConfig && (
           <section className="view">
             <div className="two-col">
               <div className="panel">
@@ -953,45 +1131,51 @@ export default function App() {
                 <div className="panel-body">
                   <div className="field">
                     <label>Base URL</label>
-                    <input
-                      value={cfg.base_url}
-                      placeholder="http://llm-gateway.intra.corp/v1"
-                      onChange={(e) => setCfg({ ...cfg, base_url: e.target.value })}
-                    />
+                    <input value={appConfig.base_url} placeholder="http://llm-gateway.intra.corp/v1" onChange={(e) => updateConfig({ base_url: e.target.value })} />
                   </div>
                   <div className="field-row">
                     <div className="field">
                       <label>模型标识</label>
-                      <input value={cfg.model} placeholder="例如 deepseek-v4-flash" onChange={(e) => setCfg({ ...cfg, model: e.target.value })} />
+                      <input value={appConfig.model} placeholder="例如 deepseek-v4-flash" onChange={(e) => updateConfig({ model: e.target.value })} />
                     </div>
                     <div className="field">
                       <label>并发数</label>
-                      <input type="number" min={1} max={8} value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value) || 1)} />
+                      <input type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
                     </div>
                   </div>
                   <div className="field">
-                    <label>API Key</label>
-                    <input type="password" value={cfg.api_key} placeholder="sk-…" onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })} />
+                    <label>API Key（{hasKey ? "已保存，留空则不修改" : "未配置"}）</label>
+                    <input type="password" value={apiKey} placeholder={hasKey ? "••••••••" : "sk-…"} onChange={(e) => setApiKey(e.target.value)} />
                   </div>
                   <div className="field-row">
                     <div className="field">
                       <label>读取超时（秒）</label>
-                      <input type="number" value={cfg.timeout_secs} onChange={(e) => setCfg({ ...cfg, timeout_secs: Number(e.target.value) || 180 })} />
+                      <input type="number" value={appConfig.timeout_secs} onChange={(e) => updateConfig({ timeout_secs: Number(e.target.value) || 180 })} />
                     </div>
                     <div className="field">
                       <label>单文件上限（MB）</label>
-                      <input value={1228} readOnly />
+                      <input type="number" value={appConfig.max_file_mb} onChange={(e) => updateConfig({ max_file_mb: Number(e.target.value) || 1228 })} />
+                    </div>
+                  </div>
+                  <div className="field-row">
+                    <div className="field">
+                      <label>最大文件数</label>
+                      <input type="number" value={appConfig.max_files} onChange={(e) => updateConfig({ max_files: Number(e.target.value) || 800 })} />
+                    </div>
+                    <div className="field">
+                      <label>历史保留（天，0=永久）</label>
+                      <input type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
                     </div>
                   </div>
                   <label className="checkline">
-                    <input type="checkbox" checked={cfg.allow_http} onChange={(e) => setCfg({ ...cfg, allow_http: e.target.checked })} /> 允许内网 HTTP（无证书网关）
+                    <input type="checkbox" checked={appConfig.allow_http} onChange={(e) => updateConfig({ allow_http: e.target.checked })} /> 允许内网 HTTP（无证书网关）
                   </label>
                   <div style={{ display: "flex", gap: 9, marginTop: 14 }}>
                     <button
                       className="btn"
                       onClick={async () => {
                         try {
-                          const reply = await api.testConnection(cfg);
+                          const reply = await api.testConnection(gatewayCfg(), apiKey || undefined);
                           toast(`连接正常：${reply}`);
                         } catch (e) {
                           toast(String(e));
@@ -1000,12 +1184,12 @@ export default function App() {
                     >
                       测试连接
                     </button>
-                    <button className="btn btn-primary" onClick={() => { saveSettings(cfg); toast("设置已保存"); }}>
+                    <button className="btn btn-primary" onClick={saveSettings}>
                       保存设置
                     </button>
                   </div>
                   <p className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
-                    注意：API Key 目前保存在浏览器本地存储，后续版本接入 Windows DPAPI 加密。
+                    API Key 通过系统凭据库加密保存（Windows 凭据管理器 / macOS Keychain），不进入配置、历史或导出。
                   </p>
                 </div>
               </div>
@@ -1014,13 +1198,28 @@ export default function App() {
                 <div className="panel-head">
                   <h2>文件名规则集</h2>
                   <span className="hint">预置一套，可增删改</span>
+                  <div className="right">
+                    <select value={activeRuleSetId} onChange={(e) => setActiveRuleSetId(e.target.value)}>
+                      {appConfig.rule_sets.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 <div className="panel-body" style={{ paddingTop: 16 }}>
                   {ruleSet ? (
                     <>
                       <div className="field">
                         <label>规则集名称</label>
-                        <input value={ruleSet.name} onChange={(e) => setRuleSet({ ...ruleSet, name: e.target.value })} />
+                        <input
+                          value={ruleSet.name}
+                          onChange={(e) => {
+                            const next = appConfig.rule_sets.map((r) => (r.id === ruleSet.id ? { ...r, name: e.target.value } : r));
+                            updateConfig({ rule_sets: next });
+                          }}
+                        />
                       </div>
                       <table className="data">
                         <thead>
@@ -1042,7 +1241,12 @@ export default function App() {
                               <td>
                                 <button
                                   className="link danger"
-                                  onClick={() => setRuleSet({ ...ruleSet, rules: ruleSet.rules.filter((x) => x.id !== r.id) })}
+                                  onClick={() => {
+                                    const next = appConfig.rule_sets.map((rs) =>
+                                      rs.id === ruleSet.id ? { ...rs, rules: rs.rules.filter((x) => x.id !== r.id) } : rs
+                                    );
+                                    updateConfig({ rule_sets: next });
+                                  }}
                                 >
                                   删
                                 </button>
@@ -1051,9 +1255,32 @@ export default function App() {
                           ))}
                         </tbody>
                       </table>
-                      <p className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
-                        规则集编辑暂为本地会话内存；持久化在后继版本接入。
-                      </p>
+                      <div className="inline" style={{ marginTop: 10 }}>
+                        <input
+                          placeholder="输入 glob 模式，如 *namespace*.json"
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter") return;
+                            const pattern = (e.target as HTMLInputElement).value.trim();
+                            if (!pattern) return;
+                            const next = appConfig.rule_sets.map((rs) =>
+                              rs.id === ruleSet.id
+                                ? {
+                                    ...rs,
+                                    rules: [
+                                      ...rs.rules,
+                                      { id: `r-${Date.now()}`, pattern, system: systems[0]?.id ?? "other", template_id: templates[0]?.id ?? "tpl-generic", enabled: true },
+                                    ],
+                                  }
+                                : rs
+                            );
+                            updateConfig({ rule_sets: next });
+                            (e.target as HTMLInputElement).value = "";
+                          }}
+                        />
+                        <button className="btn btn-sm" onClick={saveSettings}>
+                          保存规则集
+                        </button>
+                      </div>
                     </>
                   ) : (
                     <div className="empty">正在加载…</div>
@@ -1068,4 +1295,8 @@ export default function App() {
       {notice && <div className="toast is-visible">{notice}</div>}
     </div>
   );
+}
+
+function escapeHtml(text: string) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
