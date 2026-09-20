@@ -1,0 +1,154 @@
+export interface SystemType {
+  id: string;
+  name: string;
+  color: string;
+  default_template_id: string;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  content: string;
+  builtin: boolean;
+  overridden: boolean;
+}
+
+export interface Rule {
+  id: string;
+  pattern: string;
+  system: string;
+  template_id: string;
+  enabled: boolean;
+}
+
+export interface RuleSet {
+  id: string;
+  name: string;
+  builtin: boolean;
+  rules: Rule[];
+}
+
+export interface ScanEntry {
+  path: string;
+  abs_path: string;
+  name: string;
+  ext: string;
+  kind: string;
+  size: number;
+  system: string | null;
+  rule_id: string | null;
+  template_id: string | null;
+  matched: boolean;
+  selected: boolean;
+  chunks: number;
+  parse_status: string;
+  parse_error: string | null;
+  preview: string;
+  text_len: number;
+}
+
+export interface ScanResult {
+  task_id: string;
+  source_type: string;
+  source_ref: string;
+  total_files: number;
+  matched_files: number;
+  total_bytes: number;
+  entries: ScanEntry[];
+  workspace: string;
+  rule_set: RuleSet;
+  templates: Template[];
+  systems: SystemType[];
+}
+
+export interface GatewayConfig {
+  base_url: string;
+  model: string;
+  api_key: string;
+  allow_http: boolean;
+  timeout_secs: number;
+}
+
+export interface Citation {
+  file: string;
+  locator: string;
+  snippet: string;
+}
+
+export interface FileResult {
+  file: string;
+  system: string | null;
+  template_id: string;
+  verdict: string;
+  basis: string[];
+  risks: string[];
+  remediations: string[];
+  citations: Citation[];
+  chunks: number;
+  duration_ms: number;
+  raw: string;
+  error: string | null;
+}
+
+export interface ReviewFileInput {
+  path: string;
+  abs_path: string;
+  name: string;
+  kind: string;
+  system: string | null;
+  template_id: string;
+  template_content: string;
+}
+
+export interface ReviewRequest {
+  files: ReviewFileInput[];
+  cfg: GatewayConfig;
+  concurrency: number;
+  chunk_threshold: number;
+  chunk_size: number;
+}
+
+export interface ReviewProgress {
+  task_id: string;
+  index: number;
+  total: number;
+  file: string;
+  phase: string;
+  delta: string | null;
+  result: FileResult | null;
+}
+
+export interface ReviewSummary {
+  task_id: string;
+  results: FileResult[];
+  pass: number;
+  conditional: number;
+  block: number;
+  fail: number;
+}
+
+export interface TaskSummary {
+  id: string;
+  created_at: number;
+  source_type: string;
+  source_ref: string;
+  systems: string[];
+  total_files: number;
+  pass: number;
+  conditional: number;
+  block: number;
+  fail: number;
+}
+
+export interface TaskDetail {
+  summary: TaskSummary;
+  files: FileResult[];
+  rule_set: RuleSet | null;
+  templates: Template[];
+}
+
+export interface Defaults {
+  systems: SystemType[];
+  templates: Template[];
+  rule_sets: RuleSet[];
+}

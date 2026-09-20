@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配置评审台 · 界面设计稿（Private Banking）</title>
+<style>
+/* ============================================================
+   配置评审台 · Private Banking
+   浅色象牙纸 + 衬线标题 + 金铜强调 + 发丝线 + 深墨蓝侧栏
+   ============================================================ */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --heading-font: Georgia, "Times New Roman", "Songti SC", serif;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --track: .01em; --heading-track: 0; --heading-weight: 400; --h1-size: 21px;
+
+  --canvas: #f6f2ea; --surface: #fffdf9; --ink: #1c2431; --muted: #7d7666; --faint: #a89f8c;
+  --panel-border: 1px solid #e3dccd; --panel-shadow: none;
+
+  --accent: #b08d33; --accent-ink: #fffdf9; --accent-shadow: none; --focus: #b08d33;
+  --ok: #4f7a52; --ok-bright: #4f7a52; --ok-ink: #3d6240; --ok-soft: #eaf0e8; --ok-border: transparent;
+  --warn: #a2762a; --warn-soft: #f5ebd7; --danger: #8f3b34; --danger-soft: #f2e4e1;
+  --info: #3a5a78; --info-soft: #e7edf3; --purple: #6a5570; --purple-soft: #efe9f1;
+  --scroll: #ddd4c2; --dot-glow: none;
+
+  --radius-lg: 2px; --radius-md: 2px; --radius-sm: 2px; --radius-xs: 2px; --radius-pill: 2px;
+  --sys-dot: 0; --brand-radius: 2px; --brand-shadow: none;
+
+  --sidebar-w: 228px; --sb-bg: #1c2431; --sb-ink: #ece6da; --sb-muted: #93897a;
+  --sb-border: 1px solid rgba(255,255,255,.08); --sb-hover: rgba(255,255,255,.06);
+  --sb-active-bg: rgba(176,141,51,.16); --sb-active-ink: #e6c977; --sb-active-shadow: inset 3px 0 0 #b08d33;
+  --sb-badge: rgba(255,255,255,.12); --brand-bg: transparent; --brand-ink: #b08d33;
+
+  --topbar-bg: #fffdf9; --topbar-border: 1px solid #e3dccd;
+  --chip-bg: transparent; --chip-border: 1px solid #ddd4c2;
+
+  --btn-border: 1px solid #1c2431; --btn-weight: 400; --btn-hover: none; --btn-hover-shadow: none;
+  --btn2-bg: transparent; --ghost-bg: transparent; --ghost-ink: #8f6f1f; --ghost-border: 1px solid #ddd4c2;
+
+  --step-gap: 0; --step-bg: #fffdf9; --step-num-bg: transparent; --step-num-ink: #b08d33; --step-active-shadow: none;
+  --tabs-bg: transparent; --drop-bg: #faf6ee; --drop-border: 1px solid #ddd4c2; --drop-hover: #f3ecdd;
+  --input-bg: transparent; --input-border: 1px solid #d8cfbd; --focus-ring: none;
+  --label-track: .16em; --label-caps: uppercase; --label-font: "Helvetica Neue", Arial, sans-serif;
+  --tile-gap: 0; --tile-bg: transparent; --tile-border: 0; --tile-radius: 0; --tile-shadow: none;
+  --th-bg: transparent; --th-border: 2px solid #1c2431; --th-track: .14em; --th-caps: uppercase;
+  --row-border: 1px solid #eee6d7; --row-hover: #faf6ee;
+  --tag-bg: transparent; --tag-border: 1px solid #ddd4c2; --code-bg: #f7f2e8; --code-ink: #5a5140;
+  --bar-h: 3px; --bar-bg: #e8e0d0; --bar-fill: #b08d33; --bar-glow: none;
+  --group-bg: #f7f2e8; --toast-bg: #1c2431; --toast-ink: #f3ecdd; --toast-border: 1px solid transparent; --link: #8f6f1f;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; overflow: hidden; color: var(--ink); background: var(--canvas);
+  font: 14px/1.55 var(--font); letter-spacing: var(--track); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+
+.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; }
+
+/* Sidebar */
+.sidebar { display: flex; flex-direction: column; gap: 3px; min-height: 0; padding: 16px 12px;
+  color: var(--sb-ink); background: var(--sb-bg); border-right: var(--sb-border); }
+.brand { display: flex; align-items: center; gap: 11px; padding: 6px 8px 14px; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; background: var(--brand-bg);
+  color: var(--brand-ink); border: 1px solid #b08d33; border-radius: var(--brand-radius); font-weight: 800; font-size: 15px; }
+.brand-copy strong { display: block; font-size: 14px; font-family: var(--heading-font); letter-spacing: var(--heading-track); }
+.brand-copy small { display: block; color: var(--sb-muted); font-size: 10.5px; margin-top: 2px; }
+.nav-label { padding: 13px 9px 6px; color: var(--sb-muted); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; font-family: var(--mono); }
+.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 11px; color: var(--sb-ink);
+  border-radius: var(--radius-sm); font-size: 13px; text-align: left; transition: background .15s, color .15s; }
+.nav-item:hover { background: var(--sb-hover); }
+.nav-item.is-active { background: var(--sb-active-bg); color: var(--sb-active-ink); box-shadow: var(--sb-active-shadow); }
+.nav-item .ico { width: 18px; text-align: center; font-size: 15px; }
+.nav-item .badge { margin-left: auto; padding: 1px 7px; font-size: 10px; background: var(--sb-badge); border-radius: var(--radius-pill); }
+.sidebar-foot { margin-top: auto; padding: 12px 9px 4px; border-top: var(--sb-border); }
+.conn { display: flex; align-items: center; gap: 8px; color: var(--sb-muted); font-size: 11px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok-bright); box-shadow: var(--dot-glow); flex: 0 0 auto; }
+.conn strong { color: #f3ecdd; font-weight: 600; }
+.sidebar-foot .ver { margin-top: 6px; color: var(--sb-muted); font-size: 10px; font-family: var(--mono); }
+
+/* Main */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.topbar { display: flex; align-items: center; gap: 14px; padding: 15px 24px; background: var(--topbar-bg);
+  border-bottom: var(--topbar-border); border-top: 3px solid #1c2431; }
+.topbar h1 { margin: 0; font-size: var(--h1-size); font-family: var(--heading-font); font-weight: var(--heading-weight); letter-spacing: var(--heading-track); }
+.topbar .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; font-size: 11.5px; white-space: nowrap;
+  border: var(--chip-border); border-radius: var(--radius-pill); background: var(--chip-bg); color: var(--muted); }
+.chip.good, .chip.intra { color: var(--ok-ink); background: var(--ok-soft); border-color: var(--ok-border); }
+.chip i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.view { display: none; flex: 1; min-height: 0; overflow: auto; padding: 18px 24px 26px; }
+.view.is-active { display: block; }
+
+.panel { background: var(--surface); border: var(--panel-border); border-radius: var(--radius-lg); box-shadow: var(--panel-shadow); overflow: hidden; }
+.panel-head { display: flex; align-items: center; gap: 10px; padding: 13px 17px; border-bottom: var(--panel-border); }
+.panel-head h2 { margin: 0; font-size: 16px; font-family: var(--heading-font); font-weight: var(--heading-weight); font-style: italic; letter-spacing: var(--heading-track); }
+.panel-head .hint { color: var(--muted); font-size: 11.5px; }
+.panel-head .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.panel-body { padding: 17px; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 0 15px;
+  border-radius: var(--radius-sm); font-size: 13px; font-weight: var(--btn-weight); transition: .15s; border: var(--btn-border); }
+.btn:hover { transform: var(--btn-hover); box-shadow: var(--btn-hover-shadow); }
+.btn-primary { background: #1c2431; color: #f6f2ea; }
+.btn-secondary { background: var(--btn2-bg); color: var(--ink); }
+.btn-ghost { background: var(--ghost-bg); color: var(--ghost-ink); border-color: var(--ghost-border); }
+.btn-lg { min-height: 44px; font-size: 14px; border-radius: var(--radius-md); }
+.btn-block { width: 100%; }
+.btn-sm { min-height: 30px; padding: 0 10px; font-size: 12px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--step-gap); margin-bottom: 15px;
+  border-bottom: 1px solid #e3dccd; }
+.step { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 0; border-right: 1px solid #eee6d7;
+  border-radius: var(--radius-md); background: var(--step-bg); cursor: pointer; }
+.step .num { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto; font-size: 12px; font-weight: 700;
+  background: var(--step-num-bg); color: var(--step-num-ink); border-radius: var(--radius-xs); font-family: var(--mono); }
+.step .txt strong { display: block; font-size: 12.5px; }
+.step .txt small { color: var(--muted); font-size: 10.5px; }
+.step.is-active { border-color: var(--accent); }
+.step.is-active .num { background: var(--accent); color: var(--accent-ink); }
+.step.is-done .num { background: var(--ok-soft); color: var(--ok-ink); }
+.step-panel { display: none; } .step-panel.is-active { display: block; }
+.step-foot { display: flex; align-items: center; gap: 10px; margin-top: 15px; } .step-foot .spacer { flex: 1; }
+
+.src-tabs { display: inline-grid; grid-auto-flow: column; gap: 4px; padding: 4px; margin-bottom: 15px;
+  background: var(--tabs-bg); border: var(--panel-border); border-radius: var(--radius-md); }
+.src-tabs button { min-height: 32px; padding: 0 15px; border-radius: var(--radius-xs); color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.src-tabs button.is-active { background: var(--accent); color: var(--accent-ink); }
+.src-pane { display: none; } .src-pane.is-active { display: block; }
+.dropzone { display: grid; place-items: center; gap: 5px; padding: 32px 16px; text-align: center; cursor: pointer;
+  border: var(--drop-border); border-radius: var(--radius-md); background: var(--drop-bg); }
+.dropzone:hover { border-color: var(--accent); background: var(--drop-hover); }
+.dropzone .dz-ico { font-size: 22px; } .dropzone strong { font-size: 13.5px; } .dropzone small { color: var(--muted); font-size: 11.5px; }
+.field { display: grid; gap: 6px; margin-bottom: 13px; }
+.field > label { color: var(--muted); font-size: 11.5px; letter-spacing: var(--label-track); text-transform: var(--label-caps); font-family: var(--label-font); }
+.field input, .field select, .field textarea { width: 100%; padding: 9px 11px; background: var(--input-bg);
+  border: var(--input-border); border-radius: var(--radius-xs); color: var(--ink); }
+.field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.field textarea { resize: vertical; min-height: 110px; line-height: 1.6; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+.inline { display: flex; gap: 9px; align-items: center; } .inline input { flex: 1; }
+.checkline { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--tile-gap); margin-top: 15px;
+  border-top: 1px solid #e3dccd; border-bottom: 1px solid #e3dccd; }
+.stat { padding: 12px 14px; background: var(--tile-bg); border: 0; border-right: 1px solid #eee6d7; }
+.stat:last-child { border-right: 0; }
+.stat strong { display: block; font-size: 26px; font-family: var(--heading-font); letter-spacing: var(--heading-track); }
+.stat small { color: var(--muted); font-size: 11px; }
+.stat.good strong { color: var(--ok-ink); } .stat.warn strong { color: var(--warn); } .stat.danger strong { color: var(--danger); }
+
+table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.data th { text-align: left; padding: 9px 12px; color: var(--muted); font-size: 10.5px; font-weight: 700;
+  letter-spacing: var(--th-track); text-transform: var(--th-caps); background: var(--th-bg); border-bottom: var(--th-border); font-family: var(--label-font); }
+table.data td { padding: 9px 12px; border-bottom: var(--row-border); vertical-align: middle; }
+table.data tr:hover td { background: var(--row-hover); }
+.fname { font-weight: 600; } .path { color: var(--muted); font-size: 11px; }
+.table-scroll { max-height: 330px; overflow: auto; border: var(--panel-border); border-radius: var(--radius-md); }
+.tag { display: inline-block; padding: 2px 8px; font-size: 10.5px; background: var(--tag-bg); color: var(--muted);
+  border: var(--tag-border); border-radius: var(--radius-pill); font-family: var(--mono); }
+.tag.json { color: var(--info); background: var(--info-soft); border-color: transparent; }
+.tag.xlsx { color: var(--ok-ink); background: var(--ok-soft); border-color: transparent; }
+.tag.docx { color: var(--purple); background: var(--purple-soft); border-color: transparent; }
+.tag.skip { color: var(--faint); }
+.sys { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; }
+.sys::before { content: ""; width: 8px; height: 8px; border-radius: var(--sys-dot); background: var(--faint); }
+.sys.apollo::before { background: var(--info); } .sys.xxl::before { background: var(--ok-bright); }
+.sys.nebula::before { background: var(--purple); }
+select.mini { padding: 5px 8px; border: var(--input-border); border-radius: var(--radius-xs); background: var(--input-bg); color: var(--ink); font-size: 11.5px; max-width: 190px; }
+.link { color: var(--link); font-size: 12px; } .link:hover { text-decoration: underline; } .link.danger { color: var(--danger); }
+.preview-box { margin-top: 12px; padding: 12px 14px; border: var(--panel-border); border-radius: var(--radius-md);
+  background: var(--code-bg); font: 12px/1.7 var(--mono); color: var(--code-ink); white-space: pre-wrap; max-height: 170px; overflow: auto; }
+
+.progress-wrap { padding: 17px; }
+.progress-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.progress-top strong { font-size: 14px; font-family: var(--heading-font); font-style: italic; }
+.progress-top .right { margin-left: auto; color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.bar { height: var(--bar-h); border-radius: var(--radius-pill); background: var(--bar-bg); overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--bar-fill); transition: width .3s ease; }
+
+.result-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 15px; align-items: start; }
+@media (max-width: 1100px) { .result-grid { grid-template-columns: 1fr; } }
+.verdict { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; font-size: 11px; font-weight: 700;
+  border-radius: var(--radius-pill); white-space: nowrap; border: 1px solid currentColor; }
+.verdict.pass { color: var(--ok-ink); background: var(--ok-soft); }
+.verdict.conditional { color: var(--warn); background: var(--warn-soft); }
+.verdict.block { color: var(--danger); background: var(--danger-soft); }
+.verdict.fail { color: #fff; background: var(--danger); }
+.verdict.pending { color: var(--muted); background: var(--tag-bg); }
+.group-head { display: flex; align-items: center; gap: 10px; padding: 11px 17px; background: var(--group-bg); border-bottom: var(--panel-border); }
+.group-head h3 { margin: 0; font-size: 13px; font-family: var(--heading-font); font-weight: var(--heading-weight); }
+.group-head .right { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+.detail-body { padding: 17px; font-size: 13px; line-height: 1.8; }
+.detail-body .k { color: var(--ok-ink); font-weight: 700; }
+.detail-body ul { margin: 5px 0 12px; padding-left: 20px; } .detail-body li { margin: 3px 0; }
+.detail-body blockquote { margin: 4px 0 12px; padding: 6px 12px; border-left: 2px solid var(--accent); color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.export-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.toolbar .search { flex: 1; max-width: 320px; }
+.toolbar .search input { width: 100%; padding: 9px 12px; border: var(--input-border); border-radius: var(--radius-xs); background: var(--input-bg); color: var(--ink); }
+.row-actions { display: flex; gap: 12px; }
+.two-col { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.4fr); gap: 15px; align-items: start; }
+@media (max-width: 980px) { .two-col { grid-template-columns: 1fr; } }
+.tpl-item { display: flex; align-items: center; gap: 10px; padding: 12px 15px; border-bottom: var(--panel-border); cursor: pointer; }
+.tpl-item:last-child { border-bottom: 0; } .tpl-item:hover { background: var(--row-hover); } .tpl-item.is-active { background: var(--ok-soft); }
+.tpl-item strong { display: block; font-size: 13px; } .tpl-item small { color: var(--muted); font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.tpl-item .builtin { margin-left: auto; }
+
+.toast { position: fixed; left: 50%; bottom: 26px; z-index: 50; transform: translate(-50%, 12px); padding: 10px 16px;
+  border-radius: var(--radius-pill); color: var(--toast-ink); background: var(--toast-bg); font-size: 12.5px; opacity: 0;
+  pointer-events: none; transition: .2s; box-shadow: none; border: var(--toast-border); }
+.toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+[hidden] { display: none !important; }
+
+@media (max-width: 1180px) { .app { grid-template-columns: 200px minmax(0,1fr); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">审</div>
+      <div class="brand-copy"><strong>配置评审台</strong><small>内网版 · 混合包评审</small></div>
+    </div>
+    <div class="nav-label">工作区</div>
+    <button class="nav-item is-active" data-view="task"><span class="ico">✎</span>新建评审</button>
+    <button class="nav-item" data-view="history"><span class="ico">≡</span>评审历史<span class="badge">8</span></button>
+    <button class="nav-item" data-view="templates"><span class="ico">▤</span>模板管理</button>
+    <div class="nav-label">配置</div>
+    <button class="nav-item" data-view="settings"><span class="ico">⚙</span>模型与规则</button>
+    <div class="sidebar-foot">
+      <div class="conn"><span class="dot"></span><span><strong>内网网关</strong> · 已连接</span></div>
+      <div class="ver">v0.1.0 · Windows x64</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div><h1 id="pageTitle">新建评审</h1><div class="sub" id="pageSub">上传混合发布包 → 识别系统 → 分系统评审</div></div>
+      <div class="topbar-actions">
+        <span class="chip intra"><i></i>内网 HTTP</span>
+        <span class="chip good"><i></i>Private Banking</span>
+      </div>
+    </header>
+
+    <section class="view is-active" data-view-panel="task">
+      <div class="steps" id="steps">
+        <div class="step is-active" data-step="1"><span class="num">1</span><span class="txt"><strong>选择来源</strong><small>ZIP / 目录 / 文本</small></span></div>
+        <div class="step" data-step="2"><span class="num">2</span><span class="txt"><strong>扫描与解析</strong><small>识别系统与模板</small></span></div>
+        <div class="step" data-step="3"><span class="num">3</span><span class="txt"><strong>评审配置</strong><small>格式 / 粒度 / 分块</small></span></div>
+        <div class="step" data-step="4"><span class="num">4</span><span class="txt"><strong>分析结果</strong><small>按系统分组</small></span></div>
+      </div>
+
+      <div class="step-panel is-active" data-step-panel="1">
+        <div class="panel">
+          <div class="panel-head"><h2>选择评审来源</h2><span class="hint">文件数 &lt; 800 · 单文件上限可配置</span></div>
+          <div class="panel-body">
+            <div class="src-tabs" id="srcTabs">
+              <button class="is-active" data-src="upload">上传 ZIP / 文件</button>
+              <button data-src="dir">扫描本地目录</button>
+              <button data-src="text">粘贴文本</button>
+            </div>
+            <div class="src-pane is-active" data-src-pane="upload">
+              <div class="dropzone"><div class="dz-ico">📦</div><strong>拖拽发布包（ZIP）或多个文件到这里</strong><small>包内可含 Apollo JSON、XXL-JOB Excel/Word、星云配置文件夹等</small></div>
+              <div class="inline" style="margin-top:10px"><button class="btn btn-secondary btn-block" data-toast="打开文件选择器">选择文件</button><button class="btn btn-secondary btn-block" data-toast="打开 ZIP 选择器">选择 ZIP</button></div>
+            </div>
+            <div class="src-pane" data-src-pane="dir">
+              <div class="field"><label>目录路径</label><div class="inline"><input value="D:\release\2026Q3-mixed\"><button class="btn btn-secondary" data-toast="打开目录选择器">浏览…</button></div></div>
+              <label class="checkline"><input type="checkbox" checked> 递归扫描子目录</label>
+              <label class="checkline"><input type="checkbox" checked> 仅保留命中规则的文件</label>
+            </div>
+            <div class="src-pane" data-src-pane="text">
+              <div class="field"><label>粘贴要评审的内容</label><textarea placeholder="把配置或文档内容粘贴到这里…"></textarea></div>
+            </div>
+            <div class="summary">
+              <div class="stat"><strong id="sFiles">0</strong><small>待分析文件</small></div>
+              <div class="stat good"><strong id="sApollo">0</strong><small>Apollo</small></div>
+              <div class="stat good"><strong id="sXxl">0</strong><small>XXL-JOB</small></div>
+              <div class="stat good"><strong id="sNebula">0</strong><small>星云</small></div>
+            </div>
+          </div>
+        </div>
+        <div class="step-foot"><span class="spacer"></span><button class="btn btn-primary" data-goto="2">下一步：扫描解析 →</button></div>
+      </div>
+
+      <div class="step-panel" data-step-panel="2">
+        <div class="panel">
+          <div class="panel-head"><h2>扫描与解析</h2><span class="hint">命中规则自动归属系统与模板，可单独覆盖</span>
+            <div class="right"><button class="btn btn-secondary" data-toast="重新扫描">重新扫描</button></div></div>
+          <div class="panel-body">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+              <span class="tag">规则集：默认混合包规则</span><span class="link" data-toast="打开规则编辑">编辑规则</span>
+              <span style="margin-left:auto;color:var(--muted);font-size:11.5px">解析进度 <span id="parseCount">0 / 0</span></span>
+            </div>
+            <div class="bar" id="parseBar" style="margin-bottom:12px"><i></i></div>
+            <div class="table-scroll">
+              <table class="data">
+                <thead><tr><th style="width:34px"><input type="checkbox" checked></th><th>文件</th><th style="width:80px">类型</th><th style="width:80px">大小</th><th style="width:110px">归属系统</th><th style="width:210px">评审模板</th><th style="width:80px">分块</th><th style="width:60px"></th></tr></thead>
+                <tbody id="fileRows"></tbody>
+              </table>
+            </div>
+            <div class="preview-box" id="parsePreview">选择文件可预览解析后的文本…</div>
+          </div>
+        </div>
+        <div class="step-foot"><button class="btn btn-secondary" data-goto="1">← 上一步</button><span class="spacer"></span><button class="btn btn-primary" data-goto="3">下一步：评审配置 →</button></div>
+      </div>
+
+      <div class="step-panel" data-step-panel="3">
+        <div class="panel">
+          <div class="panel-head"><h2>评审配置</h2><span class="hint">模板已在文件清单按系统自动匹配</span></div>
+          <div class="panel-body">
+            <div class="field-row">
+              <div class="field"><label>默认输出格式</label><select><option>标准结论</option><option>检查表</option><option>简洁摘要</option><option>JSON</option></select></div>
+              <div class="field"><label>分析粒度</label><select><option>逐文件分析</option><option>逐文件 + 按系统汇总</option><option>合并一次性分析</option></select></div>
+            </div>
+            <div class="field-row">
+              <div class="field"><label>并发数</label><input value="3"></div>
+              <div class="field"><label>模型（在「模型与规则」配置）</label><input value="未配置" readonly></div>
+            </div>
+            <div class="field-row">
+              <div class="field"><label>分块触发阈值（字符）</label><input value="12000"></div>
+              <div class="field"><label>单块大小（字符）</label><input value="8000"></div>
+            </div>
+            <div class="field"><label>Prompt（按系统自动选用，可查看）</label><textarea style="min-height:100px">XXL-JOB：评审 XXL-JOB 配置。核对执行器、JobHandler、调度表达式、运行参数、路由与阻塞策略、超时、失败重试、幂等、告警、启停时间、容量和回滚方案；资料未展示的项目标为待确认，不得自行假定。</textarea></div>
+            <div class="checkline"><input type="checkbox" checked> 单文件/单块失败自动重试 1 次</div>
+          </div>
+        </div>
+        <div class="step-foot"><button class="btn btn-secondary" data-goto="2">← 上一步</button><span class="spacer"></span><button class="btn btn-primary btn-lg" id="startReview">开始评审</button></div>
+      </div>
+
+      <div class="step-panel" data-step-panel="4">
+        <div class="panel" style="margin-bottom:15px">
+          <div class="progress-wrap">
+            <div class="progress-top"><strong id="runTitle">正在评审…</strong><span class="right" id="runCount">0 / 0</span></div>
+            <div class="bar" id="runBar"><i></i></div>
+            <div class="summary">
+              <div class="stat good"><strong id="cPass">0</strong><small>通过</small></div>
+              <div class="stat warn"><strong id="cCond">0</strong><small>有条件通过</small></div>
+              <div class="stat danger"><strong id="cBlock">0</strong><small>阻断</small></div>
+              <div class="stat"><strong id="cChunk">0</strong><small>分块文件</small></div>
+            </div>
+          </div>
+        </div>
+        <div class="result-grid">
+          <div id="groups"></div>
+          <div class="panel">
+            <div class="panel-head"><h2>结果详情</h2><span class="hint" id="detailFile">—</span></div>
+            <div class="detail-body" id="detailBody"><p style="color:var(--muted)">点击文件查看结论、依据、风险与整改项。</p></div>
+            <div class="panel-head" style="border-top:var(--panel-border);border-bottom:0"><h2>导出（简单版）</h2></div>
+            <div class="panel-body export-row">
+              <button class="btn btn-secondary" data-toast="已导出 Excel：系统 | 文件路径 | 文件类型 | 命中规则 | 结论 | 引用 | 时间">导出 Excel</button>
+              <button class="btn btn-secondary" data-toast="已导出结构化 JSON">导出 JSON</button>
+              <button class="btn btn-secondary" data-toast="已导出 Markdown 报告">导出 Markdown</button>
+              <button class="btn btn-secondary" data-toast="已导出 HTML 报告">导出 HTML</button>
+            </div>
+          </div>
+        </div>
+        <div class="step-foot"><button class="btn btn-secondary" data-goto="3">← 修改配置</button><span class="spacer"></span><button class="btn btn-ghost" data-toast="已保存到本机历史">保存到历史</button></div>
+      </div>
+    </section>
+
+    <section class="view" data-view-panel="history">
+      <div class="toolbar"><div class="search"><input type="search" placeholder="搜索任务、文件或结论…"></div><span class="chip">全部系统</span><span class="chip">最近 30 天</span><button class="btn btn-secondary" style="margin-left:auto" data-toast="已导出全部历史">导出全部</button></div>
+      <div class="panel">
+        <table class="data">
+          <thead><tr><th>时间</th><th>来源</th><th>含系统</th><th>文件数</th><th>结论分布</th><th style="width:150px">操作</th></tr></thead>
+          <tbody>
+            <tr><td>2026-09-20 14:32</td><td>ZIP · 2026Q3-mixed.zip</td><td><span class="sys apollo">Apollo</span> <span class="sys xxl">XXL-JOB</span> <span class="sys nebula">星云</span></td><td>36</td><td><span class="verdict pass">通过 28</span> <span class="verdict conditional">有条件 6</span> <span class="verdict block">阻断 2</span></td><td><div class="row-actions"><button class="link" data-toast="打开任务详情">查看</button><button class="link danger" data-toast="确认后删除">删除</button></div></td></tr>
+            <tr><td>2026-09-19 18:47</td><td>目录 · D:\release\apollo</td><td><span class="sys apollo">Apollo</span></td><td>124</td><td><span class="verdict pass">通过 110</span> <span class="verdict conditional">有条件 12</span> <span class="verdict fail">失败 2</span></td><td><div class="row-actions"><button class="link" data-toast="打开任务详情">查看</button><button class="link danger" data-toast="确认后删除">删除</button></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="view" data-view-panel="templates">
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><h2>评审模板</h2><div class="right"><button class="btn btn-ghost" data-toast="新建模板">＋ 新建</button></div></div>
+          <div>
+            <div class="tpl-item is-active"><div><strong>XXL-JOB 配置评审</strong><small>核对执行器、JobHandler、调度表达式…</small></div><span class="tag">内置</span></div>
+            <div class="tpl-item"><div><strong>星云配置评审</strong><small>核对环境与命名空间、配置对象…</small></div><span class="tag">内置</span></div>
+            <div class="tpl-item"><div><strong>Apollo 配置评审</strong><small>核对应用标识、环境、集群…</small></div><span class="tag">内置</span></div>
+            <div class="tpl-item"><div><strong>我的：上线检查加强版</strong><small>在 XXL-JOB 基础上追加容量与灰度要求…</small></div><span class="tag">自定义</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>编辑模板</h2><div class="right"><button class="btn btn-secondary" data-toast="已另存为我的模板">另存覆盖</button><button class="btn btn-primary" data-toast="已保存模板">保存</button></div></div>
+          <div class="panel-body">
+            <div class="field"><label>模板名称</label><input value="XXL-JOB 配置评审"></div>
+            <div class="field"><label>Prompt 内容</label><textarea style="min-height:150px">评审 XXL-JOB 配置。核对执行器、JobHandler、调度表达式、运行参数、路由与阻塞策略、超时、失败重试、幂等、告警、启停时间、容量和回滚方案；资料未展示的项目标为待确认，不得自行假定。</textarea></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view-panel="settings">
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><h2>模型与连接</h2><span class="hint">模型由使用者自行配置</span></div>
+          <div class="panel-body">
+            <div class="field"><label>Base URL</label><input placeholder="http://llm-gateway.intra.corp/v1"></div>
+            <div class="field-row"><div class="field"><label>模型标识</label><input placeholder="例如 deepseek-v4-flash"></div><div class="field"><label>并发数</label><input value="3"></div></div>
+            <div class="field"><label>API Key</label><input type="password" placeholder="sk-…"></div>
+            <div class="field-row"><div class="field"><label>单文件上限（MB）</label><input value="1228"></div><div class="field"><label>最大文件数</label><input value="800"></div></div>
+            <div class="checkline"><input type="checkbox" checked> 允许内网 HTTP（无证书网关）</div>
+            <div style="display:flex;gap:9px;margin-top:14px"><button class="btn btn-secondary" data-toast="连接正常，可用模型 5 个">测试连接</button><button class="btn btn-primary" data-toast="设置已保存">保存设置</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>文件名规则集</h2><span class="hint">预置一套，可增删改</span><div class="right"><button class="btn btn-ghost" data-toast="新建规则集">＋ 新建</button></div></div>
+          <div class="panel-body" style="padding-top:0">
+            <table class="data">
+              <thead><tr><th>匹配模式（glob）</th><th style="width:110px">归属系统</th><th style="width:190px">评审模板</th><th style="width:44px"></th></tr></thead>
+              <tbody>
+                <tr><td><code>*apollo*.json</code></td><td><span class="sys apollo">Apollo</span></td><td>Apollo 配置评审</td><td><button class="link danger" data-toast="删除规则">删</button></td></tr>
+                <tr><td><code>*xxl-job*.json</code></td><td><span class="sys xxl">XXL-JOB</span></td><td>XXL-JOB 配置评审</td><td><button class="link danger" data-toast="删除规则">删</button></td></tr>
+                <tr><td><code>job-config-*.xlsx</code></td><td><span class="sys xxl">XXL-JOB</span></td><td>XXL-JOB 配置评审</td><td><button class="link danger" data-toast="删除规则">删</button></td></tr>
+                <tr><td><code>星云/**</code></td><td><span class="sys nebula">星云</span></td><td>星云配置评审</td><td><button class="link danger" data-toast="删除规则">删</button></td></tr>
+              </tbody>
+            </table>
+            <div class="inline" style="margin-top:10px"><input placeholder="输入 glob 模式，如 *namespace*.json"><button class="btn btn-secondary btn-sm" data-toast="已添加规则">添加规则</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const toast = $('#toast');
+  let tt;
+  const showToast = (m) => { toast.textContent = m; toast.classList.add('is-visible'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('is-visible'), 1900); };
+  $$('[data-toast]').forEach(b => b.addEventListener('click', () => showToast(b.dataset.toast)));
+
+  const titles = {
+    task: ['新建评审', '上传混合发布包 → 识别系统 → 分系统评审'],
+    history: ['评审历史', '本机任务与文件级结果'],
+    templates: ['模板管理', '配置评审模板，可自定义与覆盖'],
+    settings: ['模型与规则', '内网网关、容量与文件名规则集'],
+  };
+  $$('.nav-item').forEach(item => item.addEventListener('click', () => {
+    const v = item.dataset.view;
+    $$('.nav-item').forEach(n => n.classList.toggle('is-active', n === item));
+    $$('[data-view-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.viewPanel === v));
+    $('#pageTitle').textContent = titles[v][0]; $('#pageSub').textContent = titles[v][1];
+  }));
+
+  function goto(step) {
+    $$('#steps .step').forEach(s => { const n = +s.dataset.step; s.classList.toggle('is-active', n === step); s.classList.toggle('is-done', n < step); });
+    $$('[data-step-panel]').forEach(p => p.classList.toggle('is-active', +p.dataset.stepPanel === step));
+    if (step === 2) simulateParse();
+  }
+  $$('[data-goto]').forEach(b => b.addEventListener('click', () => goto(+b.dataset.goto)));
+  $$('#steps .step').forEach(s => s.addEventListener('click', () => goto(+s.dataset.step)));
+
+  $$('#srcTabs button').forEach(b => b.addEventListener('click', () => {
+    $$('#srcTabs button').forEach(x => x.classList.toggle('is-active', x === b));
+    $$('[data-src-pane]').forEach(p => p.classList.toggle('is-active', p.dataset.srcPane === b.dataset.src));
+  }));
+
+  const TEMPLATES = ['XXL-JOB 配置评审', 'Apollo 配置评审', '星云配置评审', '通用文档评审'];
+  const SYS = { apollo: ['Apollo', 'sys apollo'], xxl: ['XXL-JOB', 'sys xxl'], nebula: ['星云', 'sys nebula'], other: ['其他', 'sys other'] };
+  const files = [
+    { name: 'apollo-application.json', path: 'apollo/', type: 'JSON', size: '18 KB', system: 'apollo', template: 'Apollo 配置评审', chunks: 1, ready: true, preview: '{ "app.id": "order-service", "env": "PRO", "cluster": "default" }' },
+    { name: 'apollo-namespace-order.json', path: 'apollo/', type: 'JSON', size: '9 KB', system: 'apollo', template: 'Apollo 配置评审', chunks: 1, ready: true, preview: '{ "timeout": 3000, "retry": 0 }' },
+    { name: 'job-config-2026Q3.xlsx', path: 'xxljob/', type: 'Excel', size: '248 KB', system: 'xxl', template: 'XXL-JOB 配置评审', chunks: 3, ready: true, preview: 'Sheet1 · 420 行\n任务名 | 执行器 | cron | 路由策略 | 阻塞策略 | 超时 | 重试\norder-sync | executor-prod | 0 0/5 * * * ? | 第一个 | 单机串行 | - | 0\n…（超 12000 字符，将分 3 块分析）' },
+    { name: '上线操作手册.docx', path: 'xxljob/', type: 'Word', size: '86 KB', system: 'xxl', template: 'XXL-JOB 配置评审', chunks: 1, ready: true, preview: '上线操作手册\n1. 变更范围：订单同步任务调整调度频率。\n2. 回滚方案：恢复上一版本 cron 配置。' },
+    { name: '星云/namespace-prod.json', path: 'nebula/', type: 'JSON', size: '11 KB', system: 'nebula', template: '星云配置评审', chunks: 1, ready: true, preview: '{ "namespace": "prod", "config": { "gray": false } }' },
+    { name: 'README.md', path: '', type: '文本', size: '3 KB', system: 'other', template: '通用文档评审', chunks: 1, ready: false, preview: '项目说明…' },
+    { name: 'logo.png', path: 'assets/', type: '二进制', size: '64 KB', system: 'other', template: '—', chunks: 0, ready: false, preview: '' },
+  ];
+  const typeTag = (t) => { const c = { JSON: 'json', Excel: 'xlsx', Word: 'docx' }[t] || ''; return `<span class="tag ${c}">${t}</span>`; };
+  const sysTag = (k) => `<span class="${SYS[k][1]}">${SYS[k][0]}</span>`;
+
+  const fileRows = $('#fileRows');
+  function renderFiles() {
+    fileRows.innerHTML = files.map((f, i) => `
+      <tr>
+        <td><input type="checkbox" ${f.ready ? 'checked' : ''} ${f.ready ? '' : 'disabled'}></td>
+        <td><span class="fname">${f.name}</span><br><span class="path">${f.path || '（根目录）'}</span></td>
+        <td>${typeTag(f.type)}</td><td>${f.size}</td>
+        <td>${f.ready ? sysTag(f.system) : '<span class="tag skip">未命中</span>'}</td>
+        <td>${f.ready ? `<select class="mini" data-tpl="${i}">${TEMPLATES.map(t => `<option ${t === f.template ? 'selected' : ''}>${t}</option>`).join('')}</select>` : '<span class="tag skip">跳过</span>'}</td>
+        <td>${f.ready ? (f.chunks > 1 ? `<span class="verdict conditional">${f.chunks} 块</span>` : '1 块') : '—'}</td>
+        <td>${f.ready ? `<button class="link" data-preview="${i}">预览</button>` : ''}</td>
+      </tr>`).join('');
+    $$('[data-preview]', fileRows).forEach(b => b.addEventListener('click', () => {
+      const f = files[+b.dataset.preview];
+      $('#parsePreview').textContent = `${f.name}  ·  ${SYS[f.system][0]}  ·  ${f.template}\n${'─'.repeat(48)}\n${f.preview}`;
+      showToast('已加载解析预览：' + f.name);
+    }));
+    $$('[data-tpl]', fileRows).forEach(s => s.addEventListener('change', () => { files[+s.dataset.tpl].template = s.value; showToast('已覆盖模板：' + s.value); }));
+    const ready = files.filter(f => f.ready), c = (k) => ready.filter(f => f.system === k).length;
+    $('#sFiles').textContent = ready.length; $('#sApollo').textContent = c('apollo'); $('#sXxl').textContent = c('xxl'); $('#sNebula').textContent = c('nebula');
+    $('#parseCount').textContent = `0 / ${ready.length}`;
+  }
+  renderFiles();
+
+  let parseStarted = false;
+  function simulateParse() {
+    if (parseStarted) return; parseStarted = true;
+    const ready = files.filter(f => f.ready).length, bar = $('#parseBar > i'); let n = 0;
+    const t = setInterval(() => { n++; bar.style.width = (n / ready * 100) + '%'; $('#parseCount').textContent = `${n} / ${ready}`;
+      if (n >= ready) { clearInterval(t); showToast('解析完成，共 ' + ready + ' 个文件'); } }, 240);
+  }
+
+  $('#startReview').addEventListener('click', () => { goto(4); runReview(); });
+
+  const kinds = { pass: { label: '通过', cls: 'pass' }, conditional: { label: '有条件通过', cls: 'conditional' }, block: { label: '阻断', cls: 'block' }, fail: { label: '失败', cls: 'fail' } };
+  const details = {
+    pass: { basis: ['关键字段完整，配置可解析。', '路由与阻塞策略与任务性质匹配。'], risks: [], fixes: [] },
+    conditional: { basis: ['核心字段齐全，配置可解析。'], risks: ['失败重试为 0 且未配置告警，失败无感知。', '未设置任务超时，可能长期占用执行器。'], fixes: ['补充重试与告警配置。', '设置合理超时并补充回滚说明。'] },
+    block: { basis: [], risks: ['cron 表达式与任务注释不一致，存在误调度风险。', '执行器地址为空且未配置自动注册。'], fixes: ['核对并修正 cron 表达式。', '补齐执行器注册或地址配置后重新评审。'] },
+    fail: null,
+  };
+  const assign = ['pass', 'conditional', 'pass', 'block', 'pass'];
+
+  function runReview() {
+    const list = files.filter(f => f.ready), order = ['apollo', 'xxl', 'nebula', 'other'], groups = $('#groups');
+    groups.innerHTML = order.map(sys => {
+      const items = list.filter(f => f.system === sys); if (!items.length) return '';
+      return `<div class="panel" style="margin-bottom:15px">
+        <div class="group-head"><span class="${SYS[sys][1]}">${SYS[sys][0]}</span><h3>${items.length} 个文件</h3><span class="right" data-gstat="${sys}"></span></div>
+        <table class="data"><thead><tr><th>文件</th><th style="width:110px">结论</th><th style="width:70px">耗时</th><th style="width:56px"></th></tr></thead>
+        <tbody>${items.map(f => { const i = list.indexOf(f); return `<tr><td><span class="fname">${f.name}</span>${f.chunks > 1 ? ` <span class="tag">${f.chunks} 块合并</span>` : ''}</td>
+          <td><span class="verdict pending" data-v="${i}">排队中</span></td><td data-d="${i}">—</td><td><button class="link" data-detail="${i}" disabled>详情</button></td></tr>`; }).join('')}</tbody></table></div>`;
+    }).join('');
+    const bar = $('#runBar > i'); let done = 0; const total = list.length;
+    $('#runTitle').textContent = '正在评审…';
+    const t = setInterval(() => {
+      if (done >= total) { clearInterval(t); $('#runTitle').textContent = '评审完成'; showToast('评审完成，可导出报告'); return; }
+      const k = assign[done] || 'pass', meta = kinds[k];
+      const vEl = $(`[data-v="${done}"]`, groups); vEl.className = 'verdict ' + meta.cls; vEl.textContent = meta.label;
+      $(`[data-d="${done}"]`, groups).textContent = (0.8 + Math.random() * 2).toFixed(1) + 's';
+      const db = $(`[data-detail="${done}"]`, groups); db.disabled = false; db.addEventListener('click', () => showDetail(list[done], k));
+      done++; bar.style.width = (done / total * 100) + '%'; $('#runCount').textContent = `${done} / ${total}`;
+      const c = { pass: 0, conditional: 0, block: 0 }; for (let i = 0; i < done; i++) { const kk = assign[i] || 'pass'; if (kk in c) c[kk]++; }
+      $('#cPass').textContent = c.pass; $('#cCond').textContent = c.conditional; $('#cBlock').textContent = c.block;
+      $('#cChunk').textContent = list.filter(f => f.chunks > 1).length;
+    }, 600);
+  }
+
+  function showDetail(f, k) {
+    $('#detailFile').textContent = `${f.name} · ${f.template}`;
+    const d = details[k];
+    if (!d) { $('#detailBody').innerHTML = '<p style="color:var(--danger)">该文件分析失败，可点击「重试失败项」。</p>'; return; }
+    const ul = (a) => a.length ? `<ul>${a.map(x => `<li>${x}</li>`).join('')}</ul>` : '<p style="color:var(--muted)">无</p>';
+    $('#detailBody').innerHTML = `<p><span class="k">系统：</span>${SYS[f.system][0]}${f.chunks > 1 ? ` · 基于 ${f.chunks} 块合并` : ''}</p>
+      <p><span class="k">结论：</span>${kinds[k].label}</p><p><span class="k">依据：</span></p>${ul(d.basis)}
+      <p><span class="k">风险：</span></p>${ul(d.risks)}<p><span class="k">整改项：</span></p>${ul(d.fixes)}
+      <p><span class="k">引用：</span></p><blockquote>${f.name} · Sheet1!B12 · retry = 0</blockquote>`;
+  }
+})();
+</script>
+</body>
+</html>
