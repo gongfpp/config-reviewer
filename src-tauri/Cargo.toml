@@ -1,6 +1,6 @@
 [package]
 name = "config-reviewer"
-version = "0.1.0"
+version = "0.1.1"
 description = "内网 Windows 桌面端配置评审台"
 authors = ["gongfpp"]
 edition = "2021"
