@@ -51,3 +51,7 @@ Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https:
 - 预置文件名规则清单（需业务样例）
 - 内网网关契约细节（模型名、上下文上限、限流/错误码）
 
+
+## 内网二次修改
+
+源码修改后可直接构建和运行 EXE，无需重新生成安装包。入口为 `scripts/build-and-run.ps1 -Test -Run`，源码目录、离线依赖与工具链条件见 [内网开发说明](docs/onsite-development.md)。规则、Prompt 和模型配置可直接在界面保存，无需编译。
