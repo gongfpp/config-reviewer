@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """从干净的私有源码 checkout 向 public runner 提供一次性 AES-GCM 加密输入。"""
+import argparse
 import hashlib
 import json
 import pathlib
@@ -11,6 +12,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 REPO = 'gongfpp/config-reviewer-builds'
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser()
+parser.add_argument('--workflow', default='windows.yml', choices=['windows.yml', 'source-kit.yml'])
+options = parser.parse_args()
 
 def run(args, *, input=None, check=True):
     for attempt in range(4):
@@ -41,5 +45,5 @@ with tempfile.TemporaryDirectory(prefix='reviewer-encrypted-build-') as temp:
         notes.write_text('临时 AES-GCM 加密构建输入，不包含明文源码。成功构建后清除输入及对应 Secret。')
         run(['gh', 'release', 'create', tag, '--repo', REPO, '--target', 'main', '--title', f'临时加密构建输入 {sha}', '--notes-file', str(notes)])
     run(['gh', 'release', 'upload', tag, str(asset), '--repo', REPO, '--clobber'])
-run(['gh', 'workflow', 'run', 'windows.yml', '--repo', REPO, '-f', f'source_tag={tag}'])
+run(['gh', 'workflow', 'run', options.workflow, '--repo', REPO, '-f', f'source_tag={tag}'])
 print(f'已启动 public Windows 构建：源码 {sha}，输入 {tag}')
