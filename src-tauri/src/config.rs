@@ -17,10 +17,27 @@ pub struct AppConfig {
     pub max_files: usize,
     pub chunk_threshold: usize,
     pub chunk_size: usize,
+    #[serde(default = "default_retry")]
+    pub retry_count: usize,
+    #[serde(default = "default_granularity")]
+    pub granularity: String,
+    #[serde(default = "default_output_format")]
+    pub output_format: String,
+    #[serde(default)]
     pub history_retention_days: u32,
     pub systems: Vec<SystemType>,
     pub templates: Vec<Template>,
     pub rule_sets: Vec<RuleSet>,
+}
+
+fn default_retry() -> usize {
+    1
+}
+fn default_granularity() -> String {
+    "per_file".to_string()
+}
+fn default_output_format() -> String {
+    "standard".to_string()
 }
 
 impl Default for AppConfig {
@@ -35,6 +52,9 @@ impl Default for AppConfig {
             max_files: 800,
             chunk_threshold: 12000,
             chunk_size: 8000,
+            retry_count: 1,
+            granularity: "per_file".into(),
+            output_format: "standard".into(),
             history_retention_days: 0,
             systems: rules::default_systems(),
             templates: rules::default_templates(),

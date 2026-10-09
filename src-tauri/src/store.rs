@@ -71,6 +71,9 @@ pub fn save_task(
     templates: &[Template],
 ) -> Result<(), String> {
     let conn = open(db_path)?;
+    // 同一任务重复保存（如失败项重试）时先清理旧的明细，保证幂等。
+    conn.execute("DELETE FROM task_files WHERE task_id = ?1", params![summary.id])
+        .map_err(|e| e.to_string())?;
     let systems = serde_json::to_string(&summary.systems).map_err(|e| e.to_string())?;
     let stats = serde_json::to_string(&(
         summary.total_files,
@@ -209,6 +212,23 @@ pub fn get_task(db_path: &Path, id: &str) -> Result<Option<TaskDetail>, String> 
         rule_set,
         templates,
     }))
+}
+
+/// 按保留天数清理历史（`retention_days` <= 0 时不清理）。
+pub fn prune(db_path: &Path, retention_days: u32) -> Result<(), String> {
+    if retention_days == 0 {
+        return Ok(());
+    }
+    let cutoff = chrono::Utc::now().timestamp_millis() - (retention_days as i64) * 86_400_000;
+    let conn = open(db_path)?;
+    conn.execute(
+        "DELETE FROM task_files WHERE task_id IN (SELECT id FROM tasks WHERE created_at < ?1)",
+        params![cutoff],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM tasks WHERE created_at < ?1", params![cutoff])
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn delete_task(db_path: &Path, id: &str) -> Result<(), String> {

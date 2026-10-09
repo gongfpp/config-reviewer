@@ -27,6 +27,8 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
             std::fs::create_dir_all(&data_dir).ok();
             let workspace_root = data_dir.join("workspace");
+            // 启动时清理上次会话残留的工作区。
+            let _ = std::fs::remove_dir_all(&workspace_root);
             std::fs::create_dir_all(&workspace_root).ok();
             app.manage(AppState {
                 db_path: data_dir.join("reviewer.db"),
@@ -38,6 +40,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::load_config,
+            commands::load_defaults,
             commands::save_settings,
             commands::has_api_key,
             commands::clear_api_key,

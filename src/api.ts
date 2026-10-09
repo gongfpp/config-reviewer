@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppConfig,
+  Defaults,
   ExportRow,
   GatewayConfig,
   ReviewRequest,
@@ -14,6 +15,8 @@ import type {
 } from "./types";
 
 export const loadConfig = () => invoke<AppConfig>("load_config");
+
+export const loadDefaults = () => invoke<Defaults>("load_defaults");
 
 export const saveSettings = (config: AppConfig, apiKey?: string) =>
   invoke<void>("save_settings", { config, apiKey: apiKey ?? null });

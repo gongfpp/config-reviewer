@@ -26,6 +26,7 @@ walkdir = "2.5.0"
 globset = "0.4.20"
 encoding_rs = "0.8.41"
 futures-util = "0.3.34"
+tokio = { version = "1", features = ["sync"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 calamine = "0.36.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

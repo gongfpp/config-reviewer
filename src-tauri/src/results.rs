@@ -1,9 +1,35 @@
+use serde_json::Value;
+
 use crate::model::{Citation, FileResult};
 
-/// 依据模板与文件正文构造用户指令。
-pub fn build_instruction(template_content: &str, file_name: &str, chunk_hint: Option<(usize, usize)>) -> String {
+/// 按输出格式给出结论组织方式的说明。
+fn format_spec(output_format: &str) -> &'static str {
+    match output_format {
+        "checklist" => {
+            "请以检查表形式输出：第一条先给出结论（通过/有条件通过/阻断），随后用 Markdown 表格逐项列出「检查项 | 结论 | 依据」，最后给出【风险】【整改项】。\n"
+        }
+        "brief" => {
+            "请用简洁摘要输出：第一条给出结论（通过/有条件通过/阻断），随后不超过 5 条要点，覆盖关键依据、风险与整改项。\n"
+        }
+        "json" => {
+            "请只输出一个 JSON 对象，不要包裹 Markdown 代码块、不要输出多余文字。字段结构：{\"verdict\":\"通过|有条件通过|阻断\",\"basis\":[\"\"],\"risks\":[\"\"],\"remediations\":[\"\"],\"citations\":[{\"locator\":\"\",\"snippet\":\"\"}]}。\n"
+        }
+        _ => {
+            "标准结论必须以“通过”“有条件通过”或“阻断”之一开头，并分别给出【依据】【风险】【整改项】。\n"
+        }
+    }
+}
+
+/// 依据模板、输出格式与文件正文构造用户指令。
+pub fn build_instruction(
+    template_content: &str,
+    file_name: &str,
+    chunk_hint: Option<(usize, usize)>,
+    output_format: &str,
+) -> String {
     let mut instruction = String::new();
-    instruction.push_str("你正在执行配置/文档评审。标准结论必须以“通过”“有条件通过”或“阻断”之一开头，并分别给出【依据】【风险】【整改项】。\n");
+    instruction.push_str("你正在执行配置/文档评审。\n");
+    instruction.push_str(format_spec(output_format));
     instruction.push_str("每条依据与风险尽量给出原文引用，格式：引用：定位 | 原文片段；无法引用时写“待确认”。\n");
     instruction.push_str("只输出评审结论本体，不要复述本说明。\n\n");
     instruction.push_str("评审要求：\n");
@@ -13,11 +39,35 @@ pub fn build_instruction(template_content: &str, file_name: &str, chunk_hint: Op
     if let Some((index, total)) = chunk_hint {
         instruction.push_str(&format!("（第 {index}/{total} 块，仅评估本块内容，不要臆测其他块）"));
     }
+    if output_format == "json" {
+        instruction.push_str("\n注意：本块也请严格输出上述 JSON 结构，不要加入解释文字。");
+    }
     instruction
 }
 
 /// 从模型输出解析结论、依据、风险、整改项与引用。
-pub fn parse_result(file: &str, system: Option<String>, template_id: &str, chunks: usize, duration_ms: u64, raw: &str) -> FileResult {
+pub fn parse_result(
+    file: &str,
+    system: Option<String>,
+    template_id: &str,
+    chunks: usize,
+    duration_ms: u64,
+    raw: &str,
+    output_format: &str,
+) -> FileResult {
+    if output_format == "json" {
+        if let Some(parsed) = parse_json_result(file, raw) {
+            return FileResult {
+                file: file.to_string(),
+                system,
+                template_id: template_id.to_string(),
+                chunks,
+                duration_ms,
+                raw: raw.to_string(),
+                ..parsed
+            };
+        }
+    }
     let verdict = detect_verdict(raw);
     let (basis, risks, remediations) = split_sections(raw);
     let citations = extract_citations(file, raw);
@@ -34,6 +84,97 @@ pub fn parse_result(file: &str, system: Option<String>, template_id: &str, chunk
         duration_ms,
         raw: raw.to_string(),
         error: None,
+    }
+}
+
+fn json_object(raw: &str) -> Option<Value> {
+    let trimmed = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    serde_json::from_str::<Value>(trimmed).ok().or_else(|| {
+        let start = trimmed.find('{')?;
+        let end = trimmed.rfind('}')?;
+        if end <= start {
+            return None;
+        }
+        serde_json::from_str::<Value>(&trimmed[start..=end]).ok()
+    })
+}
+
+fn string_list(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_json_result(file: &str, raw: &str) -> Option<FileResult> {
+    let value = json_object(raw)?;
+    let verdict = value
+        .get("verdict")
+        .and_then(Value::as_str)
+        .map(|s| normalize_verdict(s))
+        .unwrap_or_else(|| detect_verdict(raw));
+    let citations = value
+        .get("citations")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|c| {
+                    let locator = c.get("locator").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let snippet = c
+                        .get("snippet")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .chars()
+                        .take(120)
+                        .collect::<String>();
+                    if locator.is_empty() && snippet.is_empty() {
+                        None
+                    } else {
+                        Some(Citation {
+                            file: file.to_string(),
+                            locator,
+                            snippet,
+                        })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(FileResult {
+        verdict,
+        basis: string_list(&value, "basis"),
+        risks: string_list(&value, "risks"),
+        remediations: string_list(&value, "remediations"),
+        citations,
+        ..Default::default()
+    })
+}
+
+fn normalize_verdict(text: &str) -> String {
+    let compact = text.replace(' ', "");
+    if compact.contains("阻断") {
+        "阻断".into()
+    } else if compact.contains("有条件通过") {
+        "有条件通过".into()
+    } else if compact.contains("通过") {
+        "通过".into()
+    } else if compact.contains("失败") {
+        "失败".into()
+    } else {
+        "未识别结论".into()
     }
 }
 

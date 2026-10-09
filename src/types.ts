@@ -100,6 +100,9 @@ export interface ReviewFileInput {
   template_content: string;
 }
 
+export type Granularity = "per_file" | "per_file_system" | "single";
+export type OutputFormat = "standard" | "checklist" | "brief" | "json";
+
 export interface ReviewRequest {
   task_id: string;
   workspace: string;
@@ -108,6 +111,9 @@ export interface ReviewRequest {
   concurrency: number;
   chunk_threshold: number;
   chunk_size: number;
+  granularity: Granularity;
+  output_format: OutputFormat;
+  retry_count: number;
 }
 
 export interface ReviewProgress {
@@ -167,6 +173,9 @@ export interface AppConfig {
   max_files: number;
   chunk_threshold: number;
   chunk_size: number;
+  retry_count: number;
+  granularity: Granularity;
+  output_format: OutputFormat;
   history_retention_days: number;
   systems: SystemType[];
   templates: Template[];
