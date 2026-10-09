@@ -815,7 +815,7 @@ export default function App() {
                       <div className="field">
                         <label>目录路径</label>
                         <div className="inline">
-                          <input value={dirPath} onChange={(e) => setDirPath(e.target.value)} placeholder="D:\\release\\2026Q3-mixed" />
+                          <input value={dirPath} onChange={(e) => setDirPath(e.target.value)} placeholder={"D:\\release\\2026Q3-mixed"} />
                           <button className="btn" onClick={pickDir}>
                             浏览…
                           </button>

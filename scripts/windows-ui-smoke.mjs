@@ -60,7 +60,7 @@ try {
   await page.getByText('连接正常：可用', { exact: true }).waitFor();
   await page.getByRole('button', { name: /新建评审/ }).click();
   await page.getByRole('button', { name: '扫描本地目录', exact: true }).click();
-  await page.getByPlaceholder('D:\\release\\2026Q3-mixed').fill(inputs);
+  await page.locator('input[placeholder*="2026Q3-mixed"]').fill(inputs);
   await page.getByRole('button', { name: '下一步：扫描解析 →', exact: true }).click();
   await page.getByText('apollo-config.json', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: '预览', exact: true }).click();
