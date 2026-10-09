@@ -134,7 +134,7 @@ try {
   assert.ok(requestCount >= 4);
   await page.getByRole('button', { name: '取消评审', exact: true }).click();
   await page.getByText('已取消', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '重试失败项', exact: true }).click();
+  await page.getByRole('button', { name: /重试失败项/ }).click();
   await page.getByText('评审完成', { exact: true }).waitFor();
   assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 5);
   await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount,
