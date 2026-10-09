@@ -15,8 +15,12 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
   $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
   if (-not $vs) { throw 'No MSVC x64 toolchain found.' }
   $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
-  $lines = & cmd.exe /s /c "`"`"$devcmd`" -no_logo -arch=x64 -host_arch=x64 >nul && set`""
-  if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize MSVC environment.' }
+  $bootstrap = Join-Path ([IO.Path]::GetTempPath()) ("reviewer-msvc-" + [Guid]::NewGuid().ToString('N') + '.cmd')
+  try {
+    @('@echo off', ('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul' -f $devcmd), 'if errorlevel 1 exit /b %errorlevel%', 'set') | Set-Content $bootstrap -Encoding ASCII
+    $lines = & cmd.exe /d /c call $bootstrap
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize MSVC environment.' }
+  } finally { if (Test-Path $bootstrap) { [IO.File]::Delete($bootstrap) } }
   foreach ($line in $lines) {
     if ($line -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
   }
