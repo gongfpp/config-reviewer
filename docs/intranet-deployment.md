@@ -13,7 +13,7 @@
 5. 默认鉴权为 `Authorization: Bearer <Key>`。要求 `api-key` 或 `X-API-Key` 的网关可填写「API Key 请求头」。默认直连，代理留空，不继承系统外网代理；需要代理时显式填写。
 6. 启用「允许内网 HTTP」。默认使用流式响应；网关拒绝流式参数时关闭。测试连接使用相同响应模式。
 
-API Key 保存到当前 Windows 用户凭据库；配置、规则、模板和历史在当前用户 `%APPDATA%\com.gongfpp.configreviewer`。更换用户/电脑需要重新配置 Key。备份时先关闭应用，保留配置及 SQLite 数据库和可能存在的 `-wal`/`-shm` 文件；配置与报告不包含 Key，但评审报告及历史可能包含原文引用，应按原资料的保密要求保管。
+API Key 保存到当前 Windows 用户凭据库；配置使用临时文件原子替换，保留上一份有效配置 `config.json.bak`；主配置损坏时可回退。配置、规则、模板和历史在当前用户 `%APPDATA%\com.gongfpp.configreviewer`。更换用户/电脑需要重新配置 Key。备份时先关闭应用，保留配置及 SQLite 数据库和可能存在的 `-wal`/`-shm` 文件；配置与报告不包含 Key，但评审报告及历史可能包含原文引用，应按原资料的保密要求保管。
 
 ## 网关契约
 
@@ -25,7 +25,7 @@ API Key 保存到当前 Windows 用户凭据库；配置、规则、模板和历
 
 ## 文件兼容性与边界
 
-- ZIP：支持普通未加密 Stored/Deflate ZIP；不支持 RAR、7z、密码 ZIP，嵌套 ZIP 不递归解压。同名包隔离，路径越界、大小写冲突及不兼容 Windows 的路径拒绝导入。
+- ZIP：支持普通未加密 Stored/Deflate ZIP；不支持 RAR、7z、密码 ZIP，嵌套 ZIP 不递归解压。ZIP 中文文件名要求标准 UTF-8 或 ZIP Unicode 扩展；GBK 旧 ZIP 若名称乱码，应先由单位工具解压再扫描目录。同名包隔离，路径越界、大小写冲突及不兼容 Windows 的路径拒绝导入。
 - JSON：合法 JSON 格式化，解析失败保留原文作为文本评审。
 - Excel：识别 `.xlsx/.xls/.xlsm/.xlsb`；本轮样例实测 `.xlsx`。按 Sheet 提取缓存单元格值，不执行公式或宏，不渲染合并单元格、图表、图片。
 - Word：仅 `.docx`，读取正文段落、表格和转义字符；不读取图片/OCR、页眉页脚、批注或旧版 `.doc`。

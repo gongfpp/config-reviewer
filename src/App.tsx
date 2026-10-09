@@ -406,7 +406,7 @@ export default function App() {
         if (idx >= 0) merged[idx] = r;
         else merged.push(r);
       }
-      const next = recomputeSummary(scan.task_id, merged, summary?.cancelled ?? false);
+      const next = recomputeSummary(scan.task_id, merged, result.cancelled);
       setResults(merged);
       setSummary(next);
       await persistTask(next);

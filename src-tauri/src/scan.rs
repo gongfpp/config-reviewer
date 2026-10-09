@@ -31,11 +31,8 @@ pub fn scan_directory(
     let max_depth = if opts.recursive { usize::MAX } else { 1 };
     let mut entries = Vec::new();
     let mut zips: Vec<PathBuf> = Vec::new();
-    for item in WalkDir::new(dir)
-        .max_depth(max_depth)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    for item in WalkDir::new(dir).max_depth(max_depth).into_iter() {
+        let item = item.map_err(|e| format!("目录读取失败，扫描未完成：{e}"))?;
         if !item.file_type().is_file() {
             continue;
         }
@@ -82,7 +79,7 @@ pub fn scan_uploads(
     for (index, raw) in paths.iter().enumerate() {
         let path = PathBuf::from(raw);
         if !path.is_file() {
-            continue;
+            return Err(format!("文件不存在或不可读取：{}", path.display()));
         }
         if kind_for(ext_of(&path)) == "zip" {
             let stem = path
@@ -117,7 +114,7 @@ pub fn scan_uploads(
     Ok(entries)
 }
 
-/// 解压 ZIP，返回 (绝对路径, 包内相对路径)。跳过目录与越界条目。
+/// 解压 ZIP，返回 (绝对路径, 包内相对路径)。越界、重复或超限时拒绝整个包。
 pub fn extract_zip(
     zip_path: &Path,
     dest: &Path,

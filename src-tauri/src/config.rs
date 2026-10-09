@@ -131,20 +131,41 @@ fn merge_rule_sets(defaults: Vec<RuleSet>, stored: Vec<RuleSet>) -> Vec<RuleSet>
 }
 
 pub fn load(path: &Path) -> AppConfig {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str::<AppConfig>(&raw)
-            .map(AppConfig::merged)
-            .unwrap_or_default(),
-        Err(_) => AppConfig::default(),
+    for candidate in [path.to_path_buf(), path.with_extension("json.bak")] {
+        if let Ok(raw) = std::fs::read_to_string(candidate) {
+            if let Ok(config) = serde_json::from_str::<AppConfig>(&raw) {
+                return config.merged();
+            }
+        }
     }
+    AppConfig::default()
 }
 
 pub fn save(path: &Path, config: &AppConfig) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
+    use std::io::Write;
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(path, raw).map_err(|e| e.to_string())
+    let raw = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
+    let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
+        file.write_all(&raw)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        drop(file);
+        if let Ok(previous) = std::fs::read(path) {
+            if serde_json::from_slice::<AppConfig>(&previous).is_ok() {
+                std::fs::write(path.with_extension("json.bak"), previous)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&temp, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
 }
 
 /// 隔离桌面 QA 数据，仅 debug 构建接受，发布版没有此入口。

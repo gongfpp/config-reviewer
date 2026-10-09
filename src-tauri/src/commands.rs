@@ -213,8 +213,8 @@ fn scan_opts(
     ScanOptions {
         recursive,
         matched_only,
-        threshold,
-        chunk_size,
+        threshold: threshold.max(1000),
+        chunk_size: chunk_size.max(500),
         max_file_bytes: cfg.max_file_mb.saturating_mul(1024 * 1024),
         max_files: cfg.max_files,
     }

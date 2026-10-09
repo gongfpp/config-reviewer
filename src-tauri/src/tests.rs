@@ -584,3 +584,61 @@ fn windows_credential_store_round_trip() {
     cleanup.unwrap();
     assert!(entry.get_password().is_err());
 }
+
+#[test]
+fn config_atomic_replace_and_backup_recovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let first = config::AppConfig {
+        model: "old-model".into(),
+        ..Default::default()
+    };
+    config::save(&path, &first).unwrap();
+    let second = config::AppConfig {
+        model: "new-model".into(),
+        ..Default::default()
+    };
+    config::save(&path, &second).unwrap();
+    assert_eq!(config::load(&path).model, "new-model");
+    std::fs::write(&path, "truncated").unwrap();
+    assert_eq!(config::load(&path).model, "old-model");
+    assert!(!std::fs::read_dir(temp.path()).unwrap().any(|e| e
+        .unwrap()
+        .path()
+        .extension()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("tmp-")));
+}
+#[test]
+fn missing_upload_is_not_silently_omitted() {
+    let temp = tempfile::tempdir().unwrap();
+    assert!(scan::scan_uploads(
+        &[temp
+            .path()
+            .join("missing.json")
+            .to_string_lossy()
+            .into_owned()],
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts()
+    )
+    .is_err());
+}
+#[cfg(unix)]
+#[test]
+fn unreadable_directory_is_not_silently_omitted() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let result = scan::scan_directory(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+    );
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+}
