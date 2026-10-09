@@ -19,7 +19,7 @@
 
 ## 修改后构建与运行
 
-先解压源码，再把离线依赖包解压到同一根目录。用 PowerShell 进入根目录：
+完整离线源码包已经合并源码与依赖，直接解压即可。若使用轻量源码包，则再把离线依赖包解压到同一根目录。用 PowerShell 进入根目录：
 
 ```powershell
 # 开发用 EXE，较快；运行现有回归测试，然后启动应用
@@ -62,4 +62,8 @@ Rust 文件位于 src-tauri/src。修改前后保持 TypeScript 与 Rust 字段�
 
 ## 证据与边界
 
-应用原有 Windows 构建及关键用户路径已经验证；本交付额外验证无安装包、离线依赖条件下的编译与直接运行。精确验证结果记录在 SOURCE-INFO.json / DEPENDENCY-INFO.json。仍需在目标 Win10 的真实网关与业务样例上确认效果。
+应用原有 Windows 构建及关键用户路径已经验证。本交付额外验证：[Windows 离线源码验证 37935184347](https://github.com/gongfpp/config-reviewer-builds/actions/runs/37935184347) 全部通过；验证源码 cde8c5fbcd55db51dbd55afcf7cc5729c90257a6。
+
+在新位置删除 node_modules，并使用空 CARGO_HOME、vendored crates、npm 离线缓存和 CARGO_NET_OFFLINE=true 后：34 项 Rust 回归通过，`build-and-run.ps1 -Test` 成功输出 standalone debug EXE；直接启动该 EXE，在真实 WebView2 中完成配置/凭据、扫描、评审、四格式导出、重启、任务互斥和取消重试检查。没有生成或安装 NSIS/MSI。保存对话框的路径选择由测试替代，其余后端操作真实执行。
+
+精确依赖版本与验证结果记录在 SOURCE-INFO.json / DEPENDENCY-INFO.json；UI 测试复用了旧报告标签“installed EXE”，本流程实际启动的是刚编译的独立 EXE。仍需在目标 Win10 的真实网关与业务样例上确认效果。
