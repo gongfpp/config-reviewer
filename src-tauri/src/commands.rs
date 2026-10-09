@@ -659,13 +659,33 @@ async fn review_combined(
         ) {
             Ok(p) => {
                 parsed_any += 1;
-                combined.push_str(&format!("\n\n===== 文件：{} =====\n{}", file.path, p.text));
+                combined.push_str(&format!(
+                    "\n\n===== 文件：{} =====\n评审要求：{}\n{}",
+                    file.path, file.template_content, p.text
+                ));
             }
             Err(err) => {
-                combined.push_str(&format!(
-                    "\n\n===== 文件：{}（解析失败：{}）=====",
-                    file.path, err
-                ));
+                let result = FileResult {
+                    file: format!("全部文件合并评审（{} 个）", files.len()),
+                    verdict: "失败".into(),
+                    error: Some(format!(
+                        "文件 {} 解析失败，合并评审未完成：{err}",
+                        file.path
+                    )),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    ..Default::default()
+                };
+                emit(
+                    app,
+                    task_id,
+                    0,
+                    1,
+                    &result.file,
+                    "done",
+                    None,
+                    Some(result.clone()),
+                );
+                return result;
             }
         }
     }
@@ -850,6 +870,7 @@ async fn stream_into(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit(
     app: &AppHandle,
     task_id: &str,

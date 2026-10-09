@@ -178,7 +178,7 @@ pub fn docx_text(xml: &str) -> Result<String, String> {
                 "br" | "cr" => out.push('\n'),
                 _ => {}
             },
-            Event::Text(e) if in_text => out.push_str(&e.as_ref()),
+            Event::Text(e) if in_text => out.push_str(e.as_ref()),
             Event::GeneralRef(e) if in_text => {
                 let name = e.as_ref();
                 let encoded = format!("&{name};");

@@ -137,7 +137,7 @@ fn parse_json_result(file: &str, raw: &str) -> Option<FileResult> {
     let verdict = value
         .get("verdict")
         .and_then(Value::as_str)
-        .map(|s| normalize_verdict(s))
+        .map(normalize_verdict)
         .unwrap_or_else(|| "未识别结论".into());
     if verdict == "未识别结论" || verdict == "失败" {
         return None;

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
@@ -87,6 +88,8 @@ export default function App() {
   const [view, setView] = useState<View>("task");
   const [activeRuleSetId, setActiveRuleSetId] = useState("");
 
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => { void getVersion().then(setAppVersion); }, []);
   const [source, setSource] = useState<"upload" | "dir" | "text">("upload");
   const [uploadPaths, setUploadPaths] = useState<string[]>([]);
   const [dirPath, setDirPath] = useState("");
@@ -724,7 +727,7 @@ export default function App() {
               {appConfig?.base_url ? (hasKey ? " · 已就绪" : " · 缺 Key") : " · 请设置"}
             </span>
           </div>
-          <div className="ver">v0.1.1 · Tauri</div>
+          <div className="ver">{appVersion ? `v${appVersion}` : ""} · Tauri</div>
         </div>
       </aside>
 
