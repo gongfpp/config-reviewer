@@ -122,9 +122,23 @@ try {
   await page.getByRole('button', { name: /模型与规则/ }).click();
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await page.getByText('连接正常：可用', { exact: true }).waitFor();
-  assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 3);
+  await page.getByRole('button', { name: /新建评审/ }).click();
+  await page.getByRole('button', { name: '扫描本地目录', exact: true }).click();
+  await page.locator('input[placeholder*="2026Q3-mixed"]').fill(inputs);
+  await page.getByRole('button', { name: '下一步：扫描解析 →', exact: true }).click();
+  await page.getByRole('button', { name: '下一步：评审配置 →', exact: true }).click();
+  await page.getByRole('button', { name: '开始评审', exact: true }).click();
+  await page.getByRole('button', { name: '确认并开始', exact: true }).click();
+  await page.getByRole('button', { name: '取消评审', exact: true }).waitFor();
+  for (let i = 0; i < 100 && requestCount < 4; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(requestCount >= 4);
+  await page.getByRole('button', { name: '取消评审', exact: true }).click();
+  await page.getByText('已取消', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '重试失败项', exact: true }).click();
+  await page.getByText('评审完成', { exact: true }).waitFor();
+  assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 5);
   await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount,
-    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history'],
+    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history', 'GUI cancellation and retry'],
     limitation: 'Save dialog response was stubbed; other Tauri IPC and file writes used the real installed application.' }, null, 2));
   console.log('Windows installed application UI smoke passed');
 } catch (error) {
