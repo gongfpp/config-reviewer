@@ -13,7 +13,7 @@ foreach ($root in @('HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients','HKLM:\SOFTWAR
 }
 if ($runtime.Count) { $runtime | ForEach-Object { Write-Output "WebView2: $($_.pv)" } }
 else { Write-Output 'WebView2: not detected. Use the offline setup EXE to install it.' }
-Write-Output "Writable user data directory: $env:APPDATA"
+Write-Output "User data directory: $env:APPDATA"
 if (-not $BaseUrl) { return }
 $uri = [Uri]$BaseUrl
 if ($uri.Scheme -notin @('http','https')) { throw 'BaseUrl must be HTTP or HTTPS.' }
@@ -25,7 +25,9 @@ if (-not $TestModel) { return }
 if (-not $Model) { throw 'Model is required with -TestModel.' }
 $secret = Read-Host 'API Key (never written to disk)' -AsSecureString
 $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
+$previousProxy = [System.Net.WebRequest]::DefaultWebProxy
 try {
+  [System.Net.WebRequest]::DefaultWebProxy = $null
   $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
   $headers = @{}
   if ($ApiKeyHeader) { $headers[$ApiKeyHeader] = $key } else { $headers['Authorization'] = "Bearer $key" }
@@ -36,4 +38,4 @@ try {
   if (-not $reply.choices[0].message.content) { throw 'Gateway reply has no choices[0].message.content.' }
   Write-Output 'OpenAI-compatible non-streaming response: OK. Test streaming in the app as well.'
 } catch { throw 'Model request failed. Check gateway address, model, authentication header and gateway logs.' }
-finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $key=$null; $headers=$null; $secret.Dispose() }
+finally { [System.Net.WebRequest]::DefaultWebProxy = $previousProxy; [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $key=$null; $headers=$null; $secret.Dispose() }
