@@ -306,7 +306,9 @@ fn excel_sheet_row_location_and_cached_values() {
     let sheet = book.add_worksheet();
     sheet.set_name("配置").unwrap();
     sheet.write_string(10, 1, "执行器").unwrap();
-    sheet.write_number(10, 2, 3).unwrap();
+    sheet
+        .write_formula(10, 2, rust_xlsxwriter::Formula::new("1+2").set_result("3"))
+        .unwrap();
     book.add_worksheet().set_name("空表").unwrap();
     book.save(&path).unwrap();
     let parsed = parse::parse_file(&path, "excel", 12000, 8000).unwrap();

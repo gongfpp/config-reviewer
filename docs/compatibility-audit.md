@@ -14,6 +14,7 @@
 
 ## 已有证据
 
+- 依赖：npm audit 0 项；cargo audit 漏洞条目 0 项。另有 proc-macro-error/unic 系列维护告警、Linux GTK 的 glib 0.18.5 unsound 告警，以及 yoke-derive 0.8.3 已撤回告警。锁定版本仍可构建；维护/平台告警与当前 Windows 运行漏洞分开记录，后续跟随 Tauri 上游处理。原始报告保存在本机 artifacts/local-validation/cargo-audit.json。
 - macOS：33 项 Rust 回归全部通过；前端类型检查/构建通过；Clippy 全 target、warnings-as-errors 通过；macOS debug 应用打包成功。
 - 实际桌面 UI（隔离数据目录与模拟网关）：设置和凭据保存、流式连通性、中文目录扫描、JSON/DOCX/UTF-16 文本三系统识别、3 文件评审、3 份完整依据/风险/整改/引用、本机历史读取均通过。
 - 导出原生 Save 对话框可打开；macOS 后台 GUI 控制无法完成保存按钮操作，因此此处不宣称四格式 GUI 保存已验证。Rust 集成测试完成真实 Excel 文件写入并重新解析。

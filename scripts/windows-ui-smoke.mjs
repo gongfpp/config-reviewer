@@ -75,14 +75,26 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'results.png'), fullPage: true });
   for (const [format, extension] of [['JSON', 'json'], ['Markdown', 'md'], ['HTML', 'html'], ['Excel', 'xlsx']]) {
     const filename = path.join(root, `报告.${extension}`);
+    const hitsBefore = await page.evaluate(() => window.__QA_DIALOG_HITS__ ?? 0);
     await page.evaluate(filename => {
-      const original = window.__TAURI_INTERNALS__.invoke;
-      window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|save' ? Promise.resolve(filename) : original(command, args, options);
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (input, options) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (decodeURIComponent(url).includes('plugin:dialog|save')) {
+          window.__QA_DIALOG_HITS__ = (window.__QA_DIALOG_HITS__ ?? 0) + 1;
+          return Promise.resolve(new Response(JSON.stringify(filename), {
+            status: 200, headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' }
+          }));
+        }
+        return originalFetch(input, options);
+      };
     }, filename);
     await page.getByRole('button', { name: `导出 ${format}`, exact: true }).click();
     for (let i = 0; i < 40; i++) {
       try { await readFile(filename); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
     }
+    const hitsAfter = await page.evaluate(() => window.__QA_DIALOG_HITS__ ?? 0);
+    assert.equal(hitsAfter, hitsBefore + 1, 'Save dialog response stub must be used exactly once');
     const data = await readFile(filename); assert.ok(data.length > 0);
     if (extension === 'json') assert.equal(JSON.parse(data.toString())[0].verdict, '有条件通过');
     if (extension === 'xlsx') assert.equal(data.subarray(0, 2).toString(), 'PK');
