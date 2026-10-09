@@ -24,7 +24,7 @@
 - Windows 最终构建与验收：[public Actions 37928119990](https://github.com/gongfpp/config-reviewer-builds/actions/runs/37928119990) 全部通过。构建输入为 `39cf6fcf1f8033e6762c3c501a35128883b668eb`，版本 0.1.2。
 - Windows Server 2022 x64 runner：34 项回归通过（含 Windows 凭据管理器）；主程序 PE 依赖检查没有动态 VCRUNTIME/MSVCP；NSIS 静默安装成功。
 - 真实已安装 EXE / WebView2：配置与 Key 保存、流式连通性、中文目录和大写 `.JSON` 识别、预览、评审详情、运行中第二任务/扫描拒绝、四格式实际文件写入、重启后历史与 Key 保留、GUI 取消后重试均通过。仅保存对话框的路径选择被测试替代，其余 IPC/文件写入/模型请求/数据库/凭据均由真实应用执行。
-- 最终 ZIP：`artifacts/windows-0.1.2/ConfigReviewer-0.1.2-windows-x64-offline.zip`，221398762 bytes（约 211 MiB），ZIP CRC 和全部内嵌 SHA256 通过。ZIP SHA256：`bf38caf4a64a876a93c885dd6b9274a00eae29fbbba317fd841504c2c5477e8e`。内含安装 EXE、说明、预检脚本、build-info.json、SHA256SUMS.txt；安装器 Authenticode 表为空，尚未代码签名。
+- CI 原始 ZIP：`artifacts/windows-0.1.2/ConfigReviewer-0.1.2-windows-x64-offline.zip`，221398762 bytes（约 211 MiB），ZIP CRC 和全部内嵌 SHA256 通过。ZIP SHA256：`bf38caf4a64a876a93c885dd6b9274a00eae29fbbba317fd841504c2c5477e8e`。内含安装 EXE、说明、预检脚本、build-info.json、SHA256SUMS.txt；安装器 Authenticode 表为空，尚未代码签名。
 - Windows UI 原始证据：`artifacts/windows-ui-final/result.json`、`results.png`；最终 CI 日志：`artifacts/windows-final-ci.log`。
 - 私有源码通过一次性 AES-GCM 包构建，public 仓库不保存明文源码。交付后清理临时加密输入和对应 Secret。
 
@@ -37,3 +37,5 @@
 Excel `.xlsx` 有样例，`.xls/.xlsm/.xlsb` 是解析库支持范围，尚未用业务样例验证；不执行宏或公式。PDF、旧 `.doc`、图片/OCR、密码 ZIP、RAR/7z 不支持。分块是字符而非 token，容量限制不代表大文件性能已经验收；大量分块结论的最终合并仍可能需要按真实模型上下文调整。
 
 ZIP 解压内容为便于失败重试保留到下次扫描或下次启动清理；应用崩溃后下一次启动清理，不承诺所有任务结束即删除。历史与报告有原文引用，需要按源资料管理。
+
+最终交付 ZIP 在 CI 原始安装器之外补入本报告和 Windows UI 证据，安装 EXE 字节完全一致。最终大小 221445215 bytes，SHA256 `764710cc24a0ee668a4b4e8c4f5b53be4bd6c28e35736a3d83642ef0338f2d7e`；再次通过 CRC 和全部内部 SHA256。校验文件为 artifacts/windows-0.1.2/ZIP-SHA256.txt。

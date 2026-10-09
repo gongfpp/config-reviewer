@@ -46,6 +46,6 @@ Windows PowerShell 5.1 可运行 `powershell -ExecutionPolicy Bypass -File .\che
 
 必须在目标内网 Windows 10 x64 上验收：断网安装（分别覆盖无/有 WebView2）、普通用户启动、真实网关连接及中文流式评审、真实混合发布包导入、失败重试/取消、四种报告导出、重启后历史与 Key 保留。还需确认单位签名/执行策略，以及实际 Windows build、CPU 架构、模型上下文和并发限额。
 
-本机 macOS 回归测试与 Windows CI 编译/凭据测试/安装器冒烟分别提供证据，不等同于目标电脑或真实内网网关验收。执行结果以本轮 `docs/compatibility-audit.md` 为准。
+本机 macOS 回归测试与 Windows CI 编译/凭据测试/安装器冒烟分别提供证据，不等同于目标电脑或真实内网网关验收。执行结果以本轮 [兼容性检查记录](compatibility-audit.md) 为准。
 
 参考：[Tauri 离线 WebView2 安装](https://v2.tauri.app/distribute/windows-installer/#offline-installer)、[Microsoft WebView2 分发](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。
