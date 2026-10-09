@@ -9,7 +9,7 @@ foreach ($tool in @('node','npm','cargo','rustc')) {
 }
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
 # 从 VS Build Tools / Visual Studio 导入 C++ 编译环境；无需修改全局环境变量。
-if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
   if (-not (Test-Path $vswhere)) { throw 'Visual Studio C++ Build Tools with Windows SDK are required.' }
   $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -22,6 +22,7 @@ if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
   }
 }
 $offline = -not $Online
+if ($offline) { $env:CARGO_NET_OFFLINE = 'true'; $env:npm_config_offline = 'true' }
 $cache = Join-Path $root '.offline/npm-cache'
 if ($offline -and -not (Test-Path (Join-Path $root '.offline/cargo-vendor'))) {
   throw 'Offline dependency pack is missing. Extract it into this project before building.'
