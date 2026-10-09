@@ -67,6 +67,9 @@ export interface GatewayConfig {
   api_key: string;
   allow_http: boolean;
   timeout_secs: number;
+  api_key_header: string;
+  proxy_url: string;
+  stream_enabled: boolean;
 }
 
 export interface Citation {
@@ -100,6 +103,9 @@ export interface ReviewFileInput {
   template_content: string;
 }
 
+export type Granularity = "per_file" | "per_file_system" | "single";
+export type OutputFormat = "standard" | "checklist" | "brief" | "json";
+
 export interface ReviewRequest {
   task_id: string;
   workspace: string;
@@ -108,6 +114,9 @@ export interface ReviewRequest {
   concurrency: number;
   chunk_threshold: number;
   chunk_size: number;
+  granularity: Granularity;
+  output_format: OutputFormat;
+  retry_count: number;
 }
 
 export interface ReviewProgress {
@@ -162,11 +171,17 @@ export interface AppConfig {
   model: string;
   allow_http: boolean;
   timeout_secs: number;
+  api_key_header: string;
+  proxy_url: string;
+  stream_enabled: boolean;
   concurrency: number;
   max_file_mb: number;
   max_files: number;
   chunk_threshold: number;
   chunk_size: number;
+  retry_count: number;
+  granularity: Granularity;
+  output_format: OutputFormat;
   history_retention_days: number;
   systems: SystemType[];
   templates: Template[];

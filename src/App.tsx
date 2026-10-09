@@ -1,23 +1,57 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 import * as api from "./api";
 import type {
   AppConfig,
+  Defaults,
   ExportRow,
   FileResult,
   GatewayConfig,
+  Granularity,
+  OutputFormat,
   ReviewFileInput,
   ReviewProgress,
   ReviewSummary,
+  Rule,
   ScanEntry,
   ScanResult,
   SystemFileSummary,
+  SystemType,
   TaskDetail,
   TaskSummary,
   Template,
 } from "./types";
+
+const GRANULARITY_LABEL: Record<Granularity, string> = {
+  per_file: "逐文件",
+  per_file_system: "逐文件 + 按系统汇总",
+  single: "合并一次性",
+};
+
+const OUTPUT_FORMAT_LABEL: Record<OutputFormat, string> = {
+  standard: "标准结论",
+  checklist: "检查表",
+  brief: "简洁摘要",
+  json: "JSON",
+};
+
+function recomputeSummary(taskId: string, results: FileResult[], cancelled: boolean): ReviewSummary {
+  let pass = 0;
+  let conditional = 0;
+  let block = 0;
+  let fail = 0;
+  for (const r of results) {
+    if (r.error) fail += 1;
+    else if (r.verdict === "通过") pass += 1;
+    else if (r.verdict === "有条件通过") conditional += 1;
+    else if (r.verdict === "阻断") block += 1;
+    else fail += 1;
+  }
+  return { task_id: taskId, results, pass, conditional, block, fail, cancelled };
+}
 
 type View = "task" | "history" | "templates" | "settings";
 
@@ -54,6 +88,8 @@ export default function App() {
   const [view, setView] = useState<View>("task");
   const [activeRuleSetId, setActiveRuleSetId] = useState("");
 
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => { void getVersion().then(setAppVersion); }, []);
   const [source, setSource] = useState<"upload" | "dir" | "text">("upload");
   const [uploadPaths, setUploadPaths] = useState<string[]>([]);
   const [dirPath, setDirPath] = useState("");
@@ -81,9 +117,14 @@ export default function App() {
 
   const [history, setHistory] = useState<TaskSummary[]>([]);
   const [historyDetail, setHistoryDetail] = useState<TaskDetail | null>(null);
+  const [historySearch, setHistorySearch] = useState("");
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
+  const [defaults, setDefaults] = useState<Defaults | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const noticeTimer = useRef<number | null>(null);
+  const activeReviewRef = useRef<string | null>(null);
+  const analysisRevisionRef = useRef(0);
 
   const toast = useCallback((message: string) => {
     setNotice(message);
@@ -92,13 +133,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    Promise.all([api.loadConfig(), api.hasApiKey()])
-      .then(([cfg, key]) => {
+    Promise.all([api.loadConfig(), api.hasApiKey(), api.loadDefaults()])
+      .then(([cfg, key, defs]) => {
         setAppConfig(cfg);
         setActiveRuleSetId(cfg.rule_sets[0]?.id ?? "");
         setEditingTemplate(cfg.templates[0] ?? null);
         setTextSystem(cfg.systems[1]?.id ?? cfg.systems[0]?.id ?? "other");
         setHasKey(key);
+        setDefaults(defs);
       })
       .catch((e) => toast(String(e)));
   }, [toast]);
@@ -114,6 +156,7 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen<ReviewProgress>("review://progress", (event) => {
       const p = event.payload;
+      if (p.task_id !== activeReviewRef.current) return;
       if (p.result) {
         setResults((prev) => {
           const next = prev.filter((r) => r.file !== p.result!.file);
@@ -154,6 +197,33 @@ export default function App() {
   );
   const systemName = (id: string | null) => systems.find((s) => s.id === id)?.name ?? id ?? "—";
   const systemClass = (id: string | null) => id ?? "other";
+  const sysStyle = (id: string | null): CSSProperties | undefined => {
+    const color = systems.find((s) => s.id === id)?.color;
+    return color ? ({ "--sys-color": color } as CSSProperties) : undefined;
+  };
+
+  // 结果分组：内置/自定义系统 + 结果中出现的未知系统 + 兜底 other，避免自定义系统结果被隐藏。
+  const groupSystems = useMemo(() => {
+    const ids: string[] = [];
+    const push = (id: string) => {
+      if (id && !ids.includes(id)) ids.push(id);
+    };
+    systems.forEach((s) => push(s.id));
+    results.forEach((r) => push(r.system ?? "other"));
+    push("other");
+    return ids;
+  }, [systems, results]);
+
+  const filteredHistory = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return history;
+    return history.filter(
+      (h) =>
+        h.source_ref.toLowerCase().includes(q) ||
+        h.source_type.toLowerCase().includes(q) ||
+        h.systems.some((s) => (systems.find((x) => x.id === s)?.name ?? s).toLowerCase().includes(q))
+    );
+  }, [history, historySearch, systems]);
 
   const gatewayCfg = (): GatewayConfig => ({
     base_url: appConfig?.base_url ?? "",
@@ -161,6 +231,9 @@ export default function App() {
     api_key: "",
     allow_http: appConfig?.allow_http ?? true,
     timeout_secs: appConfig?.timeout_secs ?? 180,
+    api_key_header: appConfig?.api_key_header ?? "",
+    proxy_url: appConfig?.proxy_url ?? "",
+    stream_enabled: appConfig?.stream_enabled ?? true,
   });
 
   const updateConfig = (patch: Partial<AppConfig>) => setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -177,6 +250,7 @@ export default function App() {
   };
 
   const doScan = async () => {
+    if (running || scanning) return toast("请先等待当前扫描或评审完成。");
     if (!ruleSet || !appConfig) return;
     setScanning(true);
     try {
@@ -211,6 +285,7 @@ export default function App() {
           chunkSize: appConfig.chunk_size,
         });
       }
+      activeReviewRef.current = null;
       setScan(result);
       setStep(2);
       toast(`扫描完成：命中 ${result.matched_files} / ${result.total_files} 个文件`);
@@ -229,9 +304,8 @@ export default function App() {
 
   const selectedEntries = useMemo(() => (scan ? scan.entries.filter((e) => e.selected && e.matched) : []), [scan]);
 
-  const startReview = async () => {
-    if (!scan || !appConfig || !ruleSet) return;
-    const files: ReviewFileInput[] = selectedEntries.map((e) => ({
+  const buildFileInput = (list: ScanEntry[]): ReviewFileInput[] =>
+    list.map((e) => ({
       path: e.path,
       abs_path: e.abs_path,
       name: e.name,
@@ -240,6 +314,63 @@ export default function App() {
       template_id: e.template_id ?? "tpl-generic",
       template_content: templates.find((t) => t.id === e.template_id)?.content ?? "",
     }));
+
+  const runRequest = async (files: ReviewFileInput[]) => {
+    if (!scan || !appConfig) throw new Error("任务未就绪");
+    analysisRevisionRef.current += 1;
+    activeReviewRef.current = scan.task_id;
+    return api.runReview({
+      task_id: scan.task_id,
+      workspace: scan.workspace,
+      files,
+      cfg: gatewayCfg(),
+      concurrency: appConfig.concurrency,
+      chunk_threshold: appConfig.chunk_threshold,
+      chunk_size: appConfig.chunk_size,
+      granularity: appConfig.granularity,
+      output_format: appConfig.output_format,
+      retry_count: appConfig.retry_count,
+    });
+  };
+
+  const persistTask = async (summary: ReviewSummary) => {
+    if (!scan || !ruleSet) return;
+    await api.saveTask({
+      sourceType: scan.source_type,
+      sourceRef: scan.source_ref,
+      ruleSet,
+      templates,
+      summary,
+    });
+    refreshHistory();
+  };
+
+  const autoSummarize = async (list: FileResult[]) => {
+    if (!appConfig || appConfig.granularity !== "per_file_system") return;
+    const revision = analysisRevisionRef.current;
+    const ids = Array.from(new Set(list.map((r) => r.system ?? "other")));
+    for (const sys of ids) {
+      const items = list.filter((r) => (r.system ?? "other") === sys);
+      if (items.length === 0) continue;
+      try {
+        const text = await api.summarizeSystem({
+          cfg: gatewayCfg(),
+          systemName: systemName(sys),
+          files: items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks })),
+        });
+        if (revision !== analysisRevisionRef.current) return;
+        setSummaries((prev) => ({ ...prev, [sys]: text }));
+      } catch {
+        // 自动汇总失败不阻断主流程
+      }
+    }
+  };
+
+  const confirmAndStart = async () => {
+    if (running || scanning) return;
+    setConfirmOpen(false);
+    if (!scan || !appConfig || !ruleSet) return;
+    const files = buildFileInput(selectedEntries);
     if (files.length === 0) {
       toast("没有待分析的文件");
       return;
@@ -251,26 +382,47 @@ export default function App() {
     setSummaries({});
     setProgress({});
     try {
-      const result = await api.runReview({
-        task_id: scan.task_id,
-        workspace: scan.workspace,
-        files,
-        cfg: gatewayCfg(),
-        concurrency: appConfig.concurrency,
-        chunk_threshold: appConfig.chunk_threshold,
-        chunk_size: appConfig.chunk_size,
-      });
+      const result = await runRequest(files);
       setSummary(result);
       setResults(result.results);
-      await api.saveTask({
-        sourceType: scan.source_type,
-        sourceRef: scan.source_ref,
-        ruleSet,
-        templates,
-        summary: result,
-      });
-      refreshHistory();
+      await persistTask(result);
       toast(result.cancelled ? "已取消，部分结果已保存" : "评审完成，已保存到本机历史");
+      await autoSummarize(result.results);
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const retryFailed = async () => {
+    if (!scan || !appConfig) return;
+    const failedPaths = new Set(results.filter((r) => r.error).map((r) => r.file));
+    const entries =
+      appConfig.granularity === "single"
+        ? scan.entries.filter((e) => e.selected && e.matched)
+        : scan.entries.filter((e) => e.selected && e.matched && failedPaths.has(e.path));
+    const files = buildFileInput(entries);
+    if (files.length === 0) {
+      toast("没有可重试的失败项");
+      return;
+    }
+    setRunning(true);
+    try {
+      const result = await runRequest(files);
+      const merged = [...results];
+      for (const r of result.results) {
+        const idx = merged.findIndex((m) => m.file === r.file);
+        if (idx >= 0) merged[idx] = r;
+        else merged.push(r);
+      }
+      const next = recomputeSummary(scan.task_id, merged, result.cancelled);
+      setResults(merged);
+      setSummary(next);
+      await persistTask(next);
+      setSummaries({});
+      await autoSummarize(merged);
+      toast(`已重试 ${files.length} 个失败项`);
     } catch (e) {
       toast(String(e));
     } finally {
@@ -283,19 +435,8 @@ export default function App() {
     toast("已请求取消，等待当前请求结束…");
   };
 
-  const exportJson = () => {
-    if (results.length === 0) return toast("没有可导出的结果");
-    download(`review-${Date.now()}.json`, JSON.stringify(results, null, 2), "application/json");
-  };
-
-  const exportMarkdown = () => {
-    if (results.length === 0) return toast("没有可导出的结果");
-    const content = buildMarkdown();
-    download(`review-${Date.now()}.md`, content, "text/markdown");
-  };
-
-  const buildMarkdown = () =>
-    results
+  const buildMarkdown = (list: FileResult[]) =>
+    list
       .map(
         (r) =>
           `## ${r.file}\n\n- 系统：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
@@ -306,9 +447,8 @@ export default function App() {
       )
       .join("\n---\n\n");
 
-  const exportHtml = () => {
-    if (results.length === 0) return toast("没有可导出的结果");
-    const rows = results
+  const buildHtml = (list: FileResult[]) => {
+    const rows = list
       .map(
         (r) =>
           `<section><h2>${escapeHtml(r.file)}</h2><p class="meta">${systemName(r.system)} · <b class="${verdictClass(
@@ -326,18 +466,24 @@ export default function App() {
            }</section>`
       )
       .join("");
-    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>配置评审报告</title>
+    return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>配置评审报告</title>
       <style>body{font:14px/1.7 -apple-system,"Microsoft YaHei UI",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#1c2431}
       h1{font-family:Georgia,serif}h2{font-family:Georgia,serif;border-bottom:1px solid #e3dccd;padding-bottom:6px;margin-top:32px}
       h3{margin:14px 0 6px;font-size:14px;color:#3d6240}.meta{color:#7d7666;font-size:12px}
       .pass{color:#3d6240}.conditional{color:#a2762a}.block,.fail{color:#8f3b34}
       blockquote{border-left:2px solid #b08d33;margin:4px 0;padding:4px 12px;color:#7d7666;font-family:monospace;font-size:12px}</style>
       </head><body><h1>配置评审报告</h1><p class="meta">生成时间：${formatTime(Date.now())}</p>${rows}</body></html>`;
-    download(`review-${Date.now()}.html`, html, "text/html");
   };
 
-  const exportExcel = async () => {
-    if (results.length === 0) return toast("没有可导出的结果");
+  const exportList = (list: FileResult[], format: "json" | "md" | "html") => {
+    if (list.length === 0) return toast("没有可导出的结果");
+    if (format === "json") download(`review-${Date.now()}.json`, JSON.stringify(list, null, 2), "application/json");
+    if (format === "md") download(`review-${Date.now()}.md`, buildMarkdown(list), "text/markdown");
+    if (format === "html") download(`review-${Date.now()}.html`, buildHtml(list), "text/html");
+  };
+
+  const exportExcelOf = async (list: FileResult[], ruleByPath: Map<string, string>) => {
+    if (list.length === 0) return toast("没有可导出的结果");
     const path = await save({
       defaultPath: `review-${Date.now()}.xlsx`,
       filters: [{ name: "Excel", extensions: ["xlsx"] }],
@@ -345,13 +491,13 @@ export default function App() {
     if (!path) return;
     const entryByPath = new Map((scan?.entries ?? []).map((e) => [e.path, e]));
     const now = formatTime(Date.now());
-    const rows: ExportRow[] = results.map((r) => {
+    const rows: ExportRow[] = list.map((r) => {
       const entry = entryByPath.get(r.file);
       return {
         system: systemName(r.system),
         file: r.file,
         file_type: entry ? kindLabel(entry.kind) : "",
-        rule: entry?.rule_id ?? "",
+        rule: ruleByPath.get(r.file) ?? entry?.rule_id ?? "",
         verdict: r.verdict,
         citations: r.citations.map((c) => `${c.locator} ${c.snippet}`).join("；"),
         time: now,
@@ -365,17 +511,33 @@ export default function App() {
     }
   };
 
-  const download = (filename: string, content: string, type: string) => {
-    const blob = new Blob([content], { type: `${type};charset=utf-8` });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+  // 命中规则：rule_id → glob 模式，供导出展示。
+  const ruleMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const rs = scan?.rule_set;
+    for (const e of scan?.entries ?? []) {
+      if (!e.rule_id) continue;
+      const rule = rs?.rules.find((x) => x.id === e.rule_id);
+      map.set(e.path, rule ? rule.pattern : e.rule_id);
+    }
+    return map;
+  }, [scan]);
+
+  const exportExcel = () => exportExcelOf(results, ruleMap);
+
+  const download = async (filename: string, content: string, _type: string) => {
+    try {
+      const extension = filename.split(".").pop() ?? "txt";
+      const path = await save({ defaultPath: filename, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
+      if (!path) return;
+      await api.exportText(path, content);
+      toast("报告已导出");
+    } catch (e) { toast(String(e)); }
   };
 
   const summarize = async (system: string) => {
+    const revision = analysisRevisionRef.current;
+    const owner = activeReviewRef.current;
     const items = results.filter((r) => (r.system ?? "other") === system);
     if (items.length === 0) return;
     const files: SystemFileSummary[] = items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks }));
@@ -385,6 +547,7 @@ export default function App() {
         systemName: systemName(system),
         files,
       });
+      if (owner !== activeReviewRef.current || revision !== analysisRevisionRef.current) return;
       setSummaries((prev) => ({ ...prev, [system]: text }));
       toast(`已生成 ${systemName(system)} 汇总`);
     } catch (e) {
@@ -408,6 +571,123 @@ export default function App() {
     } catch (e) {
       toast(String(e));
     }
+  };
+
+  const reevalHistory = () => {
+    if (!historyDetail) return;
+    if (historyDetail.summary.source_type !== "dir") {
+      toast("该来源为上传/文本，原始文件已清理，无法重评；请重新选择来源。");
+      return;
+    }
+    setDirPath(historyDetail.summary.source_ref);
+    const snap = historyDetail.rule_set;
+    if (snap) {
+      setAppConfig((prev) => {
+        if (!prev) return prev;
+        const exists = prev.rule_sets.some((r) => r.id === snap.id);
+        const rule_sets = exists ? prev.rule_sets.map((r) => (r.id === snap.id ? snap : r)) : [...prev.rule_sets, snap];
+        return { ...prev, rule_sets };
+      });
+      setActiveRuleSetId(snap.id);
+    }
+    setSource("dir");
+    setHistoryDetail(null);
+    setView("task");
+    setStep(1);
+    toast("已载入来源目录与规则集快照，请重新扫描。");
+  };
+
+  const saveTemplate = async () => {
+    if (!appConfig || !editingTemplate) return;
+    const next = appConfig.templates.map((t) => (t.id === editingTemplate.id ? editingTemplate : t));
+    const nextConfig = { ...appConfig, templates: next };
+    updateConfig({ templates: next });
+    try {
+      await api.saveSettings(nextConfig);
+      toast("模板已保存");
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  const newTemplate = () => {
+    if (!appConfig) return;
+    const tpl: Template = {
+      id: `tpl-custom-${Date.now()}`,
+      name: "新模板",
+      content: "在此填写该模板的评审要求…",
+      builtin: false,
+      overridden: false,
+    };
+    updateConfig({ templates: [...appConfig.templates, tpl] });
+    setEditingTemplate(tpl);
+  };
+
+  const deleteTemplate = (id: string) => {
+    if (!appConfig) return;
+    const next = appConfig.templates.filter((t) => t.id !== id);
+    updateConfig({ templates: next });
+    if (editingTemplate?.id === id) setEditingTemplate(next[0] ?? null);
+    void api.saveSettings({ ...appConfig, templates: next });
+  };
+
+  const restoreBuiltin = () => {
+    if (!editingTemplate) return;
+    const def = defaults?.templates.find((t) => t.id === editingTemplate.id);
+    if (!def) {
+      toast("自定义模板没有内置版本可恢复。");
+      return;
+    }
+    setEditingTemplate({ ...def, overridden: false });
+    toast("已载入内置内容，记得保存。");
+  };
+
+  const newSystem = () => {
+    if (!appConfig) return;
+    const sys: SystemType = {
+      id: `sys-custom-${Date.now()}`,
+      name: "新系统",
+      color: "#a89f8c",
+      default_template_id: templates[0]?.id ?? "tpl-generic",
+    };
+    updateConfig({ systems: [...appConfig.systems, sys] });
+  };
+
+  const updateSystem = (id: string, patch: Partial<SystemType>) => {
+    if (!appConfig) return;
+    updateConfig({ systems: appConfig.systems.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  };
+
+  const deleteSystem = (id: string) => {
+    if (!appConfig) return;
+    updateConfig({ systems: appConfig.systems.filter((s) => s.id !== id) });
+  };
+
+  const newRuleSet = () => {
+    if (!appConfig) return;
+    const id = `rs-custom-${Date.now()}`;
+    updateConfig({ rule_sets: [...appConfig.rule_sets, { id, name: "新规则集", builtin: false, rules: [] }] });
+    setActiveRuleSetId(id);
+  };
+
+  const deleteRuleSet = (id: string) => {
+    if (!appConfig) return;
+    if (appConfig.rule_sets.length <= 1) {
+      toast("至少保留一个规则集");
+      return;
+    }
+    const next = appConfig.rule_sets.filter((r) => r.id !== id);
+    updateConfig({ rule_sets: next });
+    if (activeRuleSetId === id) setActiveRuleSetId(next[0]?.id ?? "");
+    void api.saveSettings({ ...appConfig, rule_sets: next });
+  };
+
+  const updateRule = (ruleId: string, patch: Partial<Rule>) => {
+    if (!appConfig || !ruleSet) return;
+    const next = appConfig.rule_sets.map((rs) =>
+      rs.id === ruleSet.id ? { ...rs, rules: rs.rules.map((r) => (r.id === ruleId ? { ...r, ...patch } : r)) } : rs
+    );
+    updateConfig({ rule_sets: next });
   };
 
   const saveSettings = async () => {
@@ -462,7 +742,7 @@ export default function App() {
               {appConfig?.base_url ? (hasKey ? " · 已就绪" : " · 缺 Key") : " · 请设置"}
             </span>
           </div>
-          <div className="ver">v0.1.0 · Tauri</div>
+          <div className="ver">{appVersion ? `v${appVersion}` : ""} · Tauri</div>
         </div>
       </aside>
 
@@ -550,7 +830,7 @@ export default function App() {
                       <div className="field">
                         <label>目录路径</label>
                         <div className="inline">
-                          <input value={dirPath} onChange={(e) => setDirPath(e.target.value)} placeholder="D:\\release\\2026Q3-mixed" />
+                          <input value={dirPath} onChange={(e) => setDirPath(e.target.value)} placeholder={"D:\\release\\2026Q3-mixed"} />
                           <button className="btn" onClick={pickDir}>
                             浏览…
                           </button>
@@ -599,7 +879,7 @@ export default function App() {
 
                   <div className="step-foot">
                     <span className="spacer" />
-                    <button className="btn btn-primary btn-lg" onClick={doScan} disabled={scanning}>
+                    <button className="btn btn-primary btn-lg" onClick={doScan} disabled={scanning || running}>
                       {scanning ? "扫描中…" : "下一步：扫描解析 →"}
                     </button>
                   </div>
@@ -613,7 +893,7 @@ export default function App() {
                   <h2>扫描与解析</h2>
                   <span className="hint">命中规则自动归属系统与模板，可单独覆盖</span>
                   <div className="right">
-                    <button className="btn btn-sm" onClick={doScan} disabled={scanning}>
+                    <button className="btn btn-sm" onClick={doScan} disabled={scanning || running}>
                       重新扫描
                     </button>
                   </div>
@@ -659,7 +939,7 @@ export default function App() {
                               <span className={`tag ${e.kind}`}>{kindLabel(e.kind)}</span>
                             </td>
                             <td>{(e.size / 1024).toFixed(1)} KB</td>
-                            <td>{e.matched ? <span className={`sys ${systemClass(e.system)}`}>{systemName(e.system)}</span> : <span className="tag skip">未命中</span>}</td>
+                            <td>{e.matched ? <span className={`sys ${systemClass(e.system)}`} style={sysStyle(e.system)}>{systemName(e.system)}</span> : <span className="tag skip">未命中</span>}</td>
                             <td>
                               {e.matched ? (
                                 <select
@@ -732,12 +1012,40 @@ export default function App() {
                 <div className="panel-body">
                   <div className="field-row">
                     <div className="field">
+                      <label>输出格式</label>
+                      <select
+                        value={appConfig.output_format}
+                        onChange={(e) => updateConfig({ output_format: e.target.value as OutputFormat })}
+                      >
+                        {(Object.keys(OUTPUT_FORMAT_LABEL) as OutputFormat[]).map((f) => (
+                          <option key={f} value={f}>
+                            {OUTPUT_FORMAT_LABEL[f]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>分析粒度</label>
+                      <select
+                        value={appConfig.granularity}
+                        onChange={(e) => updateConfig({ granularity: e.target.value as Granularity })}
+                      >
+                        {(Object.keys(GRANULARITY_LABEL) as Granularity[]).map((g) => (
+                          <option key={g} value={g}>
+                            {GRANULARITY_LABEL[g]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="field-row">
+                    <div className="field">
                       <label>并发数</label>
                       <input type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
                     </div>
                     <div className="field">
-                      <label>模型</label>
-                      <input value={appConfig.model || "未配置"} readOnly />
+                      <label>失败自动重试次数</label>
+                      <input type="number" min={0} max={5} value={appConfig.retry_count} onChange={(e) => updateConfig({ retry_count: Number(e.target.value) || 0 })} />
                     </div>
                   </div>
                   <div className="field-row">
@@ -751,7 +1059,9 @@ export default function App() {
                     </div>
                   </div>
                   <p className="muted" style={{ fontSize: 12 }}>
-                    将分析 <strong>{selectedEntries.length}</strong> 个文件；失败单文件自动隔离并计入失败，不影响其他文件。
+                    {appConfig.granularity === "single"
+                      ? "将把所有选中的文件合并为一次评审。"
+                      : `将分析 ${selectedEntries.length} 个文件${appConfig.granularity === "per_file_system" ? "，并按系统自动生成汇总" : ""}；失败单文件自动隔离并计入失败，不影响其他文件。`}
                   </p>
                   <div className="step-foot">
                     <button className="btn" onClick={() => setStep(2)}>
@@ -763,7 +1073,7 @@ export default function App() {
                         取消评审
                       </button>
                     ) : (
-                      <button className="btn btn-primary btn-lg" onClick={startReview} disabled={selectedEntries.length === 0}>
+                      <button className="btn btn-primary btn-lg" onClick={() => setConfirmOpen(true)} disabled={selectedEntries.length === 0}>
                         开始评审
                       </button>
                     )}
@@ -783,6 +1093,7 @@ export default function App() {
                       <span className="muted" style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12 }}>
                         {doneCount} / {progressList.length || selectedEntries.length}
                       </span>
+                      {running && <button className="btn btn-sm" style={{ marginLeft: 12 }} onClick={cancelReview}>取消评审</button>}
                     </div>
                     <div className="bar">
                       <i style={{ width: `${progressList.length ? (doneCount / progressList.length) * 100 : 0}%` }} />
@@ -810,13 +1121,13 @@ export default function App() {
 
                 <div className="result-grid">
                   <div>
-                    {["apollo", "xxl", "nebula", "other"].map((sys) => {
+                    {groupSystems.map((sys) => {
                       const items = results.filter((r) => (r.system ?? "other") === sys);
                       if (items.length === 0) return null;
                       return (
                         <div className="panel" key={sys} style={{ marginBottom: 15 }}>
                           <div className="group-head">
-                            <span className={`sys ${sys}`}>{systemName(sys)}</span>
+                            <span className={`sys ${sys}`} style={sysStyle(sys)}>{systemName(sys)}</span>
                             <h3>{items.length} 个文件</h3>
                             <div className="right">
                               <button className="link" onClick={() => summarize(sys)}>
@@ -930,16 +1241,16 @@ export default function App() {
                       <h2>导出</h2>
                     </div>
                     <div className="panel-body export-row">
-                      <button className="btn" onClick={exportExcel}>
+                      <button className="btn" onClick={exportExcel} disabled={results.length === 0}>
                         导出 Excel
                       </button>
-                      <button className="btn" onClick={exportJson}>
+                      <button className="btn" onClick={() => exportList(results, "json")} disabled={results.length === 0}>
                         导出 JSON
                       </button>
-                      <button className="btn" onClick={exportMarkdown}>
+                      <button className="btn" onClick={() => exportList(results, "md")} disabled={results.length === 0}>
                         导出 Markdown
                       </button>
-                      <button className="btn" onClick={exportHtml}>
+                      <button className="btn" onClick={() => exportList(results, "html")} disabled={results.length === 0}>
                         导出 HTML
                       </button>
                     </div>
@@ -950,6 +1261,11 @@ export default function App() {
                   <button className="btn" onClick={() => setStep(3)}>
                     ← 修改配置
                   </button>
+                  {(summary?.fail ?? 0) > 0 && !running && (
+                    <button className="btn btn-ghost" onClick={retryFailed}>
+                      重试失败项（{summary?.fail}）
+                    </button>
+                  )}
                   <span className="spacer" />
                   <button className="btn btn-ghost" onClick={() => setView("history")}>
                     查看历史
@@ -963,6 +1279,17 @@ export default function App() {
         {view === "history" && (
           <section className="view">
             <div className="panel">
+              <div className="panel-head">
+                <h2>评审历史</h2>
+                <div className="right">
+                  <input
+                    className="search"
+                    placeholder="搜索来源 / 系统"
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                  />
+                </div>
+              </div>
               <table className="data">
                 <thead>
                   <tr>
@@ -975,14 +1302,14 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.length === 0 && (
+                  {filteredHistory.length === 0 && (
                     <tr>
                       <td colSpan={6} className="empty">
-                        暂无历史。成功评审才会入库。
+                        {history.length === 0 ? "暂无历史。成功评审才会入库。" : "没有匹配的记录。"}
                       </td>
                     </tr>
                   )}
-                  {history.map((h) => (
+                  {filteredHistory.map((h) => (
                     <tr key={h.id}>
                       <td>{formatTime(h.created_at)}</td>
                       <td>
@@ -991,7 +1318,7 @@ export default function App() {
                       </td>
                       <td>
                         {h.systems.map((s) => (
-                          <span key={s} className={`sys ${s}`} style={{ marginRight: 8 }}>
+                          <span key={s} className={`sys ${s}`} style={{ marginRight: 8, ...sysStyle(s) }}>
                             {systemName(s)}
                           </span>
                         ))}
@@ -1024,6 +1351,21 @@ export default function App() {
                 <div className="panel-head">
                   <h2>任务详情 · {historyDetail.summary.source_ref}</h2>
                   <div className="right">
+                    <button className="btn btn-sm" onClick={() => exportExcelOf(historyDetail.files, new Map())}>
+                      导出 Excel
+                    </button>
+                    <button className="btn btn-sm" onClick={() => exportList(historyDetail.files, "json")}>
+                      JSON
+                    </button>
+                    <button className="btn btn-sm" onClick={() => exportList(historyDetail.files, "md")}>
+                      Markdown
+                    </button>
+                    <button className="btn btn-sm" onClick={() => exportList(historyDetail.files, "html")}>
+                      HTML
+                    </button>
+                    <button className="btn btn-sm" onClick={reevalHistory}>
+                      重评
+                    </button>
                     <button className="btn btn-sm" onClick={() => setHistoryDetail(null)}>
                       关闭
                     </button>
@@ -1042,7 +1384,7 @@ export default function App() {
                       <tr key={f.file}>
                         <td>{f.file}</td>
                         <td>
-                          <span className={`sys ${systemClass(f.system)}`}>{systemName(f.system)}</span>
+                          <span className={`sys ${systemClass(f.system)}`} style={sysStyle(f.system)}>{systemName(f.system)}</span>
                         </td>
                         <td>
                           <span className={`verdict ${verdictClass(f.verdict)}`}>{f.verdict}</span>
@@ -1062,6 +1404,11 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>评审模板</h2>
+                  <div className="right">
+                    <button className="btn btn-sm" onClick={newTemplate}>
+                      新建模板
+                    </button>
+                  </div>
                 </div>
                 <div>
                   {templates.map((t) => (
@@ -1071,6 +1418,17 @@ export default function App() {
                         <small>{t.content}</small>
                       </div>
                       <span className="tag">{t.builtin ? (t.overridden ? "已覆盖" : "内置") : "自定义"}</span>
+                      {!t.builtin && (
+                        <button
+                          className="link danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteTemplate(t.id);
+                          }}
+                        >
+                          删
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1079,19 +1437,10 @@ export default function App() {
                 <div className="panel-head">
                   <h2>编辑模板</h2>
                   <div className="right">
-                    <button className="btn btn-sm" onClick={() => setEditingTemplate(templates[0] ?? null)}>
+                    <button className="btn btn-sm" onClick={restoreBuiltin}>
                       恢复内置
                     </button>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={async () => {
-                        if (!appConfig || !editingTemplate) return;
-                        const next = appConfig.templates.map((t) => (t.id === editingTemplate.id ? editingTemplate : t));
-                        updateConfig({ templates: next });
-                        await api.saveSettings({ ...appConfig, templates: next });
-                        toast("模板已保存");
-                      }}
-                    >
+                    <button className="btn btn-primary btn-sm" onClick={saveTemplate}>
                       保存
                     </button>
                   </div>
@@ -1167,6 +1516,17 @@ export default function App() {
                       <input type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
                     </div>
                   </div>
+                  <div className="field">
+                    <label>API Key 请求头（留空为 Bearer）</label>
+                    <input value={appConfig.api_key_header} placeholder="留空，或 api-key / X-API-Key" onChange={(e) => updateConfig({ api_key_header: e.target.value })} />
+                  </div>
+                  <div className="field">
+                    <label>代理地址（留空直连内网）</label>
+                    <input value={appConfig.proxy_url} placeholder="可选：http://proxy.intra:8080" onChange={(e) => updateConfig({ proxy_url: e.target.value })} />
+                  </div>
+                  <label className="checkline">
+                    <input type="checkbox" checked={appConfig.stream_enabled} onChange={(e) => updateConfig({ stream_enabled: e.target.checked })} /> 使用流式响应（网关不支持时关闭）
+                  </label>
                   <label className="checkline">
                     <input type="checkbox" checked={appConfig.allow_http} onChange={(e) => updateConfig({ allow_http: e.target.checked })} /> 允许内网 HTTP（无证书网关）
                   </label>
@@ -1197,7 +1557,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>文件名规则集</h2>
-                  <span className="hint">预置一套，可增删改</span>
+                  <span className="hint">规则 = glob + 归属系统 + 评审模板</span>
                   <div className="right">
                     <select value={activeRuleSetId} onChange={(e) => setActiveRuleSetId(e.target.value)}>
                       {appConfig.rule_sets.map((r) => (
@@ -1206,6 +1566,12 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                    <button className="btn btn-sm" onClick={newRuleSet}>
+                      新建
+                    </button>
+                    <button className="btn btn-sm" onClick={() => deleteRuleSet(ruleSet?.id ?? "")}>
+                      删除
+                    </button>
                   </div>
                 </div>
                 <div className="panel-body" style={{ paddingTop: 16 }}>
@@ -1233,11 +1599,27 @@ export default function App() {
                         <tbody>
                           {ruleSet.rules.map((r) => (
                             <tr key={r.id}>
-                              <td>{r.pattern}</td>
                               <td>
-                                <span className={`sys ${systemClass(r.system)}`}>{systemName(r.system)}</span>
+                                <input className="cell-input" value={r.pattern} onChange={(e) => updateRule(r.id, { pattern: e.target.value })} />
                               </td>
-                              <td>{templates.find((t) => t.id === r.template_id)?.name ?? r.template_id}</td>
+                              <td>
+                                <select className="mini" value={r.system} onChange={(e) => updateRule(r.id, { system: e.target.value })}>
+                                  {systems.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td>
+                                <select className="mini" value={r.template_id} onChange={(e) => updateRule(r.id, { template_id: e.target.value })}>
+                                  {templates.map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                      {t.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
                               <td>
                                 <button
                                   className="link danger"
@@ -1288,9 +1670,122 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            <div className="panel" style={{ marginTop: 15 }}>
+              <div className="panel-head">
+                <h2>系统类型</h2>
+                <span className="hint">名称 + 颜色 + 默认模板，可扩展</span>
+                <div className="right">
+                  <button className="btn btn-sm" onClick={newSystem}>
+                    新增系统
+                  </button>
+                </div>
+              </div>
+              <div className="panel-body" style={{ paddingTop: 16 }}>
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>系统 ID</th>
+                      <th>名称</th>
+                      <th style={{ width: 120 }}>颜色</th>
+                      <th style={{ width: 190 }}>默认模板</th>
+                      <th style={{ width: 50 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {systems.map((s) => (
+                      <tr key={s.id}>
+                        <td>
+                          <span className="path">{s.id}</span>
+                        </td>
+                        <td>
+                          <input className="cell-input" value={s.name} onChange={(e) => updateSystem(s.id, { name: e.target.value })} />
+                        </td>
+                        <td>
+                          <input
+                            className="cell-input"
+                            type="color"
+                            value={s.color}
+                            onChange={(e) => updateSystem(s.id, { color: e.target.value })}
+                          />
+                        </td>
+                        <td>
+                          <select className="mini" value={s.default_template_id} onChange={(e) => updateSystem(s.id, { default_template_id: e.target.value })}>
+                            {templates.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <button className="link danger" onClick={() => deleteSystem(s.id)} disabled={s.id === "other"}>
+                            删
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                  修改后点击下方「保存设置」写入本机配置。
+                </p>
+              </div>
+            </div>
           </section>
         )}
       </div>
+
+      {confirmOpen && scan && appConfig && (
+        <div className="modal-mask" onClick={() => setConfirmOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>确认数据去向</h2>
+            </div>
+            <div className="modal-body">
+              <p className="muted" style={{ marginTop: 0 }}>
+                即将把所选文件内容发送至下列内网网关进行评审，请确认。
+              </p>
+              <table className="data">
+                <tbody>
+                  <tr>
+                    <td className="k">网关</td>
+                    <td>{appConfig.base_url || "未配置"}</td>
+                  </tr>
+                  <tr>
+                    <td className="k">模型</td>
+                    <td>{appConfig.model || "未配置"}</td>
+                  </tr>
+                  <tr>
+                    <td className="k">分析对象</td>
+                    <td>
+                      {appConfig.granularity === "single"
+                        ? `${selectedEntries.length} 个文件（合并一次性）`
+                        : `${selectedEntries.length} 个文件`}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="k">输出格式 / 粒度</td>
+                    <td>
+                      {OUTPUT_FORMAT_LABEL[appConfig.output_format]} · {GRANULARITY_LABEL[appConfig.granularity]}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              {!hasKey && <p className="error-text">尚未配置 API Key，请先到「模型与规则」设置。</p>}
+            </div>
+            <div className="modal-foot">
+              <button className="btn" onClick={() => setConfirmOpen(false)}>
+                取消
+              </button>
+              <span className="spacer" />
+              <button className="btn btn-primary" onClick={confirmAndStart} disabled={!hasKey}>
+                确认并开始
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {notice && <div className="toast is-visible">{notice}</div>}
     </div>

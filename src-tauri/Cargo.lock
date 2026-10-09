@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "config-reviewer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calamine",
  "chrono",
@@ -664,6 +664,7 @@ dependencies = [
  "futures-util",
  "globset",
  "keyring",
+ "quick-xml 0.42.0",
  "reqwest",
  "rusqlite",
  "rust_xlsxwriter",
@@ -673,6 +674,8 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
+ "tokio",
  "uuid",
  "walkdir",
  "zip",
@@ -4751,7 +4754,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

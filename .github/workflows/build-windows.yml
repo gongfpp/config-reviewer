@@ -2,56 +2,61 @@ name: build-windows
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    tags: ["v*"]
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
+      - uses: ilammy/msvc-dev-cmd@v1
       - name: 安装前端依赖
         run: npm ci
-
-      - name: 前端类型检查与构建
-        run: npm run typecheck
-
-      - name: Rust 检查
-        run: cargo check --manifest-path src-tauri/Cargo.toml
-
-      - name: 构建 Windows 安装包
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 上传安装包
+      - name: 前端检查与构建
+        run: npm run build
+      - name: Rust 回归测试（含 Windows 凭据库）
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: 构建离线安装包（内置 WebView2）
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+      - name: 检查主程序没有动态 VC++ 运行库依赖
+        shell: pwsh
+        run: |
+          $deps = & dumpbin /dependents src-tauri/target/x86_64-pc-windows-msvc/release/config-reviewer.exe
+          $deps | Write-Output
+          if ($deps -match 'VCRUNTIME\d*\.dll|MSVCP\d*\.dll') { throw 'Unexpected dynamic Visual C++ runtime dependency' }
+      - name: 打包完整内网交付物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/target/release/bundle/nsis | Out-Null
+          Copy-Item src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe src-tauri/target/release/bundle/nsis/
+          ./scripts/package-windows.ps1
+      - name: 离线安装器冒烟检查
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem artifacts/windows-offline/*-setup.exe
+          $destination = Join-Path $env:RUNNER_TEMP 'ConfigReviewer-install'
+          $process = Start-Process $setup.FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          if (-not (Test-Path (Join-Path $destination 'config-reviewer.exe'))) { throw 'Installed executable not found' }
+      - name: 上传离线交付物
         uses: actions/upload-artifact@v4
         with:
-          name: config-reviewer-windows
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+          name: config-reviewer-windows-offline
+          path: artifacts/ConfigReviewer-*-windows-x64-offline.zip
           if-no-files-found: error
-
       - name: 发布 Release（仅 tag 触发）
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          name: 配置评审台 ${{ github.ref_name }}
+          name: 配置评审台 ${{ github.ref_name }}（离线安装包）
           draft: false
-          files: src-tauri/target/release/bundle/nsis/*.exe
+          files: artifacts/ConfigReviewer-*-windows-x64-offline.zip

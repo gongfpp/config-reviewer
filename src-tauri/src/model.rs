@@ -122,6 +122,12 @@ pub struct GatewayConfig {
     pub allow_http: bool,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub api_key_header: String,
+    #[serde(default)]
+    pub proxy_url: String,
+    #[serde(default = "default_true")]
+    pub stream_enabled: bool,
 }
 
 fn default_timeout() -> u64 {
@@ -142,6 +148,15 @@ pub struct ReviewRequest {
     pub chunk_threshold: usize,
     #[serde(default = "default_chunk")]
     pub chunk_size: usize,
+    /// per_file / per_file_system / single
+    #[serde(default = "default_granularity")]
+    pub granularity: String,
+    /// standard / checklist / brief / json
+    #[serde(default = "default_output_format")]
+    pub output_format: String,
+    /// 失败自动重试次数（不含首次）。
+    #[serde(default = "default_retry")]
+    pub retry_count: usize,
 }
 
 fn default_threshold() -> usize {
@@ -149,6 +164,15 @@ fn default_threshold() -> usize {
 }
 fn default_chunk() -> usize {
     8000
+}
+fn default_granularity() -> String {
+    "per_file".to_string()
+}
+fn default_output_format() -> String {
+    "standard".to_string()
+}
+fn default_retry() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

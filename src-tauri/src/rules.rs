@@ -93,8 +93,10 @@ fn rule(id: &str, pattern: &str, system: &str, template_id: &str) -> Rule {
 /// 匹配单个 glob 模式；同时尝试完整相对路径与文件名。
 pub fn pattern_matches(pattern: &str, rel_path: &str, name: &str) -> bool {
     let normalized = rel_path.replace('\\', "/");
+    let pattern = pattern.replace('\\', "/");
     for target in [normalized.as_str(), name] {
-        if let Ok(glob) = globset::GlobBuilder::new(pattern)
+        if let Ok(glob) = globset::GlobBuilder::new(&pattern)
+            .case_insensitive(true)
             .literal_separator(false)
             .backslash_escape(false)
             .build()
@@ -114,7 +116,11 @@ pub fn resolve(rule_set: &RuleSet, rel_path: &str, name: &str) -> Option<(String
             continue;
         }
         if pattern_matches(&rule.pattern, rel_path, name) {
-            return Some((rule.id.clone(), rule.system.clone(), rule.template_id.clone()));
+            return Some((
+                rule.id.clone(),
+                rule.system.clone(),
+                rule.template_id.clone(),
+            ));
         }
     }
     None
