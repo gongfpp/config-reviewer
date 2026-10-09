@@ -17,7 +17,9 @@ let requestCount = 0;
 const server = http.createServer(async (req, res) => {
   let body = ''; for await (const piece of req) body += piece;
   const value = JSON.parse(body); assert.equal(req.headers.authorization, 'Bearer mock-key'); requestCount++;
-  const text = value.messages[0].content.includes('回复两个字') ? '可用' : reply;
+  const connectivity = value.messages[0].content.includes('回复两个字');
+  const text = connectivity ? '可用' : reply;
+  if (!connectivity) await new Promise(resolve => setTimeout(resolve, 1500));
   if (value.stream) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
@@ -69,6 +71,17 @@ try {
   await page.getByRole('button', { name: '开始评审', exact: true }).click();
   await page.getByRole('heading', { name: '确认数据去向' }).waitFor();
   await page.getByRole('button', { name: '确认并开始', exact: true }).click();
+  await page.getByRole('button', { name: '取消评审', exact: true }).waitFor();
+  const overlap = await page.evaluate(async ({ inputs, gateway }) => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    const errors = [];
+    try { await invoke('run_review', { request: { task_id: 'overlap-probe', files: [], cfg: { base_url: gateway, model: 'mock-model', api_key: '', allow_http: true, timeout_secs: 3 } } }); }
+    catch (error) { errors.push(String(error)); }
+    try { await invoke('scan_directory', { path: inputs, ruleSet: { id: 'probe', name: 'probe', builtin: false, rules: [] }, recursive: true, matchedOnly: false, threshold: 12000, chunkSize: 8000 }); }
+    catch (error) { errors.push(String(error)); }
+    return errors;
+  }, { inputs, gateway });
+  assert.equal(overlap.length, 2); assert.ok(overlap.every(error => error.includes('评审正在运行')));
   await page.getByText('评审完成', { exact: true }).waitFor();
   await page.getByRole('button', { name: '详情', exact: true }).click();
   await page.getByText('补充告警阈值', { exact: true }).first().waitFor();
@@ -109,7 +122,7 @@ try {
   await page.getByText('连接正常：可用', { exact: true }).waitFor();
   assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 3);
   await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount,
-    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'details', 'four report exports', 'restart history'],
+    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history'],
     limitation: 'Save dialog response was stubbed; other Tauri IPC and file writes used the real installed application.' }, null, 2));
   console.log('Windows installed application UI smoke passed');
 } catch (error) {

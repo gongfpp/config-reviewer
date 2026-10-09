@@ -123,6 +123,7 @@ export default function App() {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const noticeTimer = useRef<number | null>(null);
+  const activeReviewRef = useRef<string | null>(null);
 
   const toast = useCallback((message: string) => {
     setNotice(message);
@@ -154,6 +155,7 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen<ReviewProgress>("review://progress", (event) => {
       const p = event.payload;
+      if (p.task_id !== activeReviewRef.current) return;
       if (p.result) {
         setResults((prev) => {
           const next = prev.filter((r) => r.file !== p.result!.file);
@@ -247,6 +249,7 @@ export default function App() {
   };
 
   const doScan = async () => {
+    if (running || scanning) return toast("请先等待当前扫描或评审完成。");
     if (!ruleSet || !appConfig) return;
     setScanning(true);
     try {
@@ -281,6 +284,7 @@ export default function App() {
           chunkSize: appConfig.chunk_size,
         });
       }
+      activeReviewRef.current = null;
       setScan(result);
       setStep(2);
       toast(`扫描完成：命中 ${result.matched_files} / ${result.total_files} 个文件`);
@@ -312,6 +316,7 @@ export default function App() {
 
   const runRequest = async (files: ReviewFileInput[]) => {
     if (!scan || !appConfig) throw new Error("任务未就绪");
+    activeReviewRef.current = scan.task_id;
     return api.runReview({
       task_id: scan.task_id,
       workspace: scan.workspace,
@@ -358,6 +363,7 @@ export default function App() {
   };
 
   const confirmAndStart = async () => {
+    if (running || scanning) return;
     setConfirmOpen(false);
     if (!scan || !appConfig || !ruleSet) return;
     const files = buildFileInput(selectedEntries);
@@ -864,7 +870,7 @@ export default function App() {
 
                   <div className="step-foot">
                     <span className="spacer" />
-                    <button className="btn btn-primary btn-lg" onClick={doScan} disabled={scanning}>
+                    <button className="btn btn-primary btn-lg" onClick={doScan} disabled={scanning || running}>
                       {scanning ? "扫描中…" : "下一步：扫描解析 →"}
                     </button>
                   </div>
@@ -878,7 +884,7 @@ export default function App() {
                   <h2>扫描与解析</h2>
                   <span className="hint">命中规则自动归属系统与模板，可单独覆盖</span>
                   <div className="right">
-                    <button className="btn btn-sm" onClick={doScan} disabled={scanning}>
+                    <button className="btn btn-sm" onClick={doScan} disabled={scanning || running}>
                       重新扫描
                     </button>
                   </div>

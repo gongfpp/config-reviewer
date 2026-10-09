@@ -80,6 +80,17 @@ pub fn clear_api_key() -> Result<(), String> {
     secrets::save_api_key("")
 }
 
+fn ensure_idle(state: &AppState) -> Result<(), String> {
+    let active = state
+        .cancels
+        .lock()
+        .map_err(|_| "任务状态不可用".to_string())?;
+    if !active.is_empty() {
+        return Err("评审正在运行，请先取消或等待完成后再扫描。".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn scan_directory(
     state: State<'_, AppState>,
@@ -90,6 +101,7 @@ pub fn scan_directory(
     threshold: usize,
     chunk_size: usize,
 ) -> Result<ScanResult, String> {
+    ensure_idle(&state)?;
     let cfg = config::load(&state.config_path);
     let task_id = Uuid::new_v4().to_string();
     let workspace = fresh_workspace(&state.workspace_root, &task_id)?;
@@ -114,6 +126,7 @@ pub fn scan_uploads(
     threshold: usize,
     chunk_size: usize,
 ) -> Result<ScanResult, String> {
+    ensure_idle(&state)?;
     let cfg = config::load(&state.config_path);
     let task_id = Uuid::new_v4().to_string();
     let workspace = fresh_workspace(&state.workspace_root, &task_id)?;
@@ -155,6 +168,7 @@ pub fn scan_text(
     threshold: usize,
     chunk_size: usize,
 ) -> Result<ScanResult, String> {
+    ensure_idle(&state)?;
     if content.trim().is_empty() {
         return Err("内容为空".into());
     }
@@ -291,11 +305,16 @@ pub async fn run_review(
         request.task_id.clone()
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    state
-        .cancels
-        .lock()
-        .unwrap()
-        .insert(task_id.clone(), cancel.clone());
+    {
+        let mut active = state
+            .cancels
+            .lock()
+            .map_err(|_| "任务状态不可用".to_string())?;
+        if !active.is_empty() {
+            return Err("已有评审正在运行，请先取消或等待完成。".into());
+        }
+        active.insert(task_id.clone(), cancel.clone());
+    }
 
     let outcome = run_review_inner(&app, &state, &request, &task_id, &cancel).await;
 
