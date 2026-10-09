@@ -1,0 +1,17 @@
+# 在 Windows 构建成功后生成可导入内网的完整压缩包和哈希清单。
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$stage = Join-Path $root 'artifacts/windows-offline'
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
+$installers = @(Get-ChildItem (Join-Path $root 'src-tauri/target/release/bundle/nsis') -Filter '*-setup.exe')
+if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer.' }
+if ($installers[0].Length -lt 50MB) { throw 'Installer is unexpectedly small: offline WebView2 may be missing.' }
+Copy-Item $installers[0].FullName $stage
+Copy-Item (Join-Path $root 'docs/intranet-deployment.md') (Join-Path $stage '安装与兼容性说明.md')
+Copy-Item (Join-Path $root 'scripts/check-intranet.ps1') $stage
+$hashes = Get-ChildItem $stage -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+$hashes | Set-Content (Join-Path $stage 'SHA256SUMS.txt') -Encoding utf8
+$archive = Join-Path $root "artifacts/ConfigReviewer-$version-windows-x64-offline.zip"
+Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
+Write-Output $archive

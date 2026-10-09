@@ -30,14 +30,18 @@ pub fn build_instruction(
     let mut instruction = String::new();
     instruction.push_str("你正在执行配置/文档评审。\n");
     instruction.push_str(format_spec(output_format));
-    instruction.push_str("每条依据与风险尽量给出原文引用，格式：引用：定位 | 原文片段；无法引用时写“待确认”。\n");
+    instruction.push_str(
+        "每条依据与风险尽量给出原文引用，格式：引用：定位 | 原文片段；无法引用时写“待确认”。\n",
+    );
     instruction.push_str("只输出评审结论本体，不要复述本说明。\n\n");
     instruction.push_str("评审要求：\n");
     instruction.push_str(template_content.trim());
     instruction.push_str("\n\n待评审文件：");
     instruction.push_str(file_name);
     if let Some((index, total)) = chunk_hint {
-        instruction.push_str(&format!("（第 {index}/{total} 块，仅评估本块内容，不要臆测其他块）"));
+        instruction.push_str(&format!(
+            "（第 {index}/{total} 块，仅评估本块内容，不要臆测其他块）"
+        ));
     }
     if output_format == "json" {
         instruction.push_str("\n注意：本块也请严格输出上述 JSON 结构，不要加入解释文字。");
@@ -69,6 +73,13 @@ pub fn parse_result(
         }
     }
     let verdict = detect_verdict(raw);
+    let error = if output_format == "json" {
+        Some("模型未返回合法的评审 JSON".to_string())
+    } else if verdict == "未识别结论" {
+        Some("模型输出缺少有效结论，请重试".to_string())
+    } else {
+        None
+    };
     let (basis, risks, remediations) = split_sections(raw);
     let citations = extract_citations(file, raw);
     FileResult {
@@ -83,7 +94,7 @@ pub fn parse_result(
         chunks,
         duration_ms,
         raw: raw.to_string(),
-        error: None,
+        error,
     }
 }
 
@@ -120,11 +131,22 @@ fn string_list(value: &Value, key: &str) -> Vec<String> {
 
 fn parse_json_result(file: &str, raw: &str) -> Option<FileResult> {
     let value = json_object(raw)?;
+    if !value.is_object() {
+        return None;
+    }
     let verdict = value
         .get("verdict")
         .and_then(Value::as_str)
         .map(|s| normalize_verdict(s))
-        .unwrap_or_else(|| detect_verdict(raw));
+        .unwrap_or_else(|| "未识别结论".into());
+    if verdict == "未识别结论" || verdict == "失败" {
+        return None;
+    }
+    for key in ["basis", "risks", "remediations", "citations"] {
+        if !value.get(key).is_some_and(Value::is_array) {
+            return None;
+        }
+    }
     let citations = value
         .get("citations")
         .and_then(Value::as_array)
@@ -132,7 +154,12 @@ fn parse_json_result(file: &str, raw: &str) -> Option<FileResult> {
             items
                 .iter()
                 .filter_map(|c| {
-                    let locator = c.get("locator").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let locator = c
+                        .get("locator")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
                     let snippet = c
                         .get("snippet")
                         .and_then(Value::as_str)
@@ -164,32 +191,29 @@ fn parse_json_result(file: &str, raw: &str) -> Option<FileResult> {
 }
 
 fn normalize_verdict(text: &str) -> String {
-    let compact = text.replace(' ', "");
-    if compact.contains("阻断") {
-        "阻断".into()
-    } else if compact.contains("有条件通过") {
-        "有条件通过".into()
-    } else if compact.contains("通过") {
-        "通过".into()
-    } else if compact.contains("失败") {
-        "失败".into()
-    } else {
-        "未识别结论".into()
+    match text.trim() {
+        "通过" | "有条件通过" | "阻断" | "失败" => text.trim().into(),
+        _ => "未识别结论".into(),
     }
 }
 
 pub fn detect_verdict(raw: &str) -> String {
-    let head: String = raw.chars().take(200).collect();
-    let lowered = head.replace(' ', "");
-    if lowered.contains("阻断") {
-        "阻断".into()
-    } else if lowered.contains("有条件通过") {
-        "有条件通过".into()
-    } else if lowered.contains("通过") {
-        "通过".into()
-    } else {
-        "未识别结论".into()
+    let first = raw
+        .lines()
+        .find(|s| !s.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches(['#', '*', '-', ' ', '【']);
+    let first = first
+        .strip_prefix("结论")
+        .unwrap_or(first)
+        .trim_start_matches(['：', ':', ' ', '】']);
+    for verdict in ["有条件通过", "阻断", "通过"] {
+        if first.starts_with(verdict) {
+            return verdict.into();
+        }
     }
+    "未识别结论".into()
 }
 
 fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
@@ -206,10 +230,7 @@ fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
         if trimmed.is_empty() {
             continue;
         }
-        let header = trimmed
-            .trim_start_matches(['#', '*', '-', ' '])
-            .trim_end_matches(['：', ':'])
-            .trim();
+        let header = trimmed.trim_matches(['#', '*', '-', ' ', '【', '】', '：', ':']);
         if matches!(header, "依据" | "标准依据") {
             section = Section::Basis;
             continue;
@@ -247,7 +268,9 @@ fn extract_citations(file: &str, raw: &str) -> Vec<Citation> {
     let mut citations = Vec::new();
     for line in raw.lines() {
         let trimmed = line.trim().trim_start_matches(['>', '-', '*', ' ']);
-        let Some(rest) = trimmed.strip_prefix("引用") else { continue };
+        let Some(rest) = trimmed.strip_prefix("引用") else {
+            continue;
+        };
         let rest = rest.trim_start_matches(['：', ':']).trim();
         if rest.is_empty() {
             continue;

@@ -1,6 +1,6 @@
 [package]
 name = "config-reviewer"
-version = "0.1.1"
+version = "0.1.2"
 description = "内网 Windows 桌面端配置评审台"
 authors = ["gongfpp"]
 edition = "2021"
@@ -26,7 +26,7 @@ walkdir = "2.5.0"
 globset = "0.4.20"
 encoding_rs = "0.8.41"
 futures-util = "0.3.34"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 calamine = "0.36.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -36,6 +36,10 @@ reqwest = { version = "0.13.5", features = ["json", "stream"] }
 tauri-plugin-dialog = "2.7.3"
 rust_xlsxwriter = "0.99.1"
 keyring = "4.2.0"
+quick-xml = "0.42.0"
+
+[dev-dependencies]
+tempfile = "3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

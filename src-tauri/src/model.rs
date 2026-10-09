@@ -122,6 +122,12 @@ pub struct GatewayConfig {
     pub allow_http: bool,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub api_key_header: String,
+    #[serde(default)]
+    pub proxy_url: String,
+    #[serde(default = "default_true")]
+    pub stream_enabled: bool,
 }
 
 fn default_timeout() -> u64 {

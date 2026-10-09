@@ -87,3 +87,5 @@ export const listHistory = () => invoke<TaskSummary[]>("list_history");
 export const getHistory = (id: string) => invoke<TaskDetail | null>("get_history", { id });
 
 export const deleteHistory = (id: string) => invoke<void>("delete_history", { id });
+
+export const exportText = (path: string, content: string) => invoke<void>("export_text", { path, content });

@@ -62,13 +62,12 @@ pub fn save_settings(
     config: AppConfig,
     api_key: Option<String>,
 ) -> Result<(), String> {
-    config::save(&state.config_path, &config)?;
     if let Some(key) = api_key {
         if !key.trim().is_empty() {
             secrets::save_api_key(&key)?;
         }
     }
-    Ok(())
+    config::save(&state.config_path, &config)
 }
 
 #[tauri::command]
@@ -95,13 +94,14 @@ pub fn scan_directory(
     let task_id = Uuid::new_v4().to_string();
     let workspace = fresh_workspace(&state.workspace_root, &task_id)?;
     let opts = scan_opts(&cfg, recursive, matched_only, threshold, chunk_size);
-    let entries = match scan::scan_directory(PathBuf::from(&path).as_path(), &rule_set, &workspace, &opts) {
-        Ok(entries) => entries,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&workspace);
-            return Err(e);
-        }
-    };
+    let entries =
+        match scan::scan_directory(PathBuf::from(&path).as_path(), &rule_set, &workspace, &opts) {
+            Ok(entries) => entries,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&workspace);
+                return Err(e);
+            }
+        };
     build_result("dir", &path, task_id, workspace, entries, rule_set, &cfg)
 }
 
@@ -133,7 +133,15 @@ pub fn scan_uploads(
     } else {
         format!("{} 个文件", paths.len())
     };
-    build_result("upload", &source_ref, task_id, workspace, entries, rule_set, &cfg)
+    build_result(
+        "upload",
+        &source_ref,
+        task_id,
+        workspace,
+        entries,
+        rule_set,
+        &cfg,
+    )
 }
 
 /// 粘贴文本来源：写入工作区后作为单个文本文件评审。
@@ -184,16 +192,31 @@ pub fn scan_text(
         preview: parsed.preview,
         text_len: parsed.text.chars().count(),
     };
-    build_result("text", &name, task_id, workspace, vec![entry], rule_set, &cfg)
+    build_result(
+        "text",
+        &name,
+        task_id,
+        workspace,
+        vec![entry],
+        rule_set,
+        &cfg,
+    )
 }
 
-fn scan_opts(cfg: &AppConfig, recursive: bool, matched_only: bool, threshold: usize, chunk_size: usize) -> ScanOptions {
+fn scan_opts(
+    cfg: &AppConfig,
+    recursive: bool,
+    matched_only: bool,
+    threshold: usize,
+    chunk_size: usize,
+) -> ScanOptions {
     ScanOptions {
         recursive,
         matched_only,
         threshold,
         chunk_size,
         max_file_bytes: cfg.max_file_mb.saturating_mul(1024 * 1024),
+        max_files: cfg.max_files,
     }
 }
 
@@ -208,7 +231,11 @@ fn build_result(
 ) -> Result<ScanResult, String> {
     if entries.len() > cfg.max_files {
         let _ = std::fs::remove_dir_all(&workspace);
-        return Err(format!("文件数 {} 超过上限 {}", entries.len(), cfg.max_files));
+        return Err(format!(
+            "文件数 {} 超过上限 {}",
+            entries.len(),
+            cfg.max_files
+        ));
     }
     let total_files = entries.len() as u64;
     let matched_files = entries.iter().filter(|e| e.matched).count() as u64;
@@ -229,7 +256,10 @@ fn build_result(
 }
 
 #[tauri::command]
-pub async fn test_connection(cfg: GatewayConfig, api_key: Option<String>) -> Result<String, String> {
+pub async fn test_connection(
+    cfg: GatewayConfig,
+    api_key: Option<String>,
+) -> Result<String, String> {
     let mut cfg = cfg;
     if let Some(key) = api_key {
         if !key.trim().is_empty() {
@@ -261,7 +291,11 @@ pub async fn run_review(
         request.task_id.clone()
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    state.cancels.lock().unwrap().insert(task_id.clone(), cancel.clone());
+    state
+        .cancels
+        .lock()
+        .unwrap()
+        .insert(task_id.clone(), cancel.clone());
 
     let outcome = run_review_inner(&app, &state, &request, &task_id, &cancel).await;
 
@@ -314,7 +348,16 @@ async fn run_review_inner(
 
     if request.granularity == "single" {
         let result = review_combined(
-            app, &cfg, &request.files, threshold, chunk_size, &output_format, task_id, retry_count, &sem, cancel,
+            app,
+            &cfg,
+            &request.files,
+            threshold,
+            chunk_size,
+            &output_format,
+            task_id,
+            retry_count,
+            &sem,
+            cancel,
         )
         .await;
         all.push(result);
@@ -328,7 +371,17 @@ async fn run_review_inner(
             let output_format = output_format.clone();
             async move {
                 review_one(
-                    &app, &cfg, file, threshold, chunk_size, &output_format, &task_id, index, total, retry_count, &sem,
+                    &app,
+                    &cfg,
+                    file,
+                    threshold,
+                    chunk_size,
+                    &output_format,
+                    &task_id,
+                    index,
+                    total,
+                    retry_count,
+                    &sem,
                     cancel,
                 )
                 .await
@@ -368,7 +421,16 @@ async fn review_one(
     cancel: Arc<AtomicBool>,
 ) -> FileResult {
     let start = Instant::now();
-    emit(app, task_id, index, total, &file.name, "parse", Some("正在解析…"), None);
+    emit(
+        app,
+        task_id,
+        index,
+        total,
+        &file.name,
+        "parse",
+        Some("正在解析…"),
+        None,
+    );
 
     let path = PathBuf::from(&file.abs_path);
     let parsed = match parse::parse_file(&path, &file.kind, threshold, chunk_size) {
@@ -384,13 +446,32 @@ async fn review_one(
                 duration_ms: start.elapsed().as_millis() as u64,
                 ..Default::default()
             };
-            emit(app, task_id, index, total, &file.name, "done", None, Some(result.clone()));
+            emit(
+                app,
+                task_id,
+                index,
+                total,
+                &file.name,
+                "done",
+                None,
+                Some(result.clone()),
+            );
             return result;
         }
     };
 
     let raw = analyze_parsed(
-        app, cfg, &file.name, &file.template_content, &parsed, output_format, task_id, index, total, retry_count, sem,
+        app,
+        cfg,
+        &file.name,
+        &file.template_content,
+        &parsed,
+        output_format,
+        task_id,
+        index,
+        total,
+        retry_count,
+        sem,
         cancel.clone(),
     )
     .await;
@@ -420,7 +501,16 @@ async fn review_one(
     if result.error.is_some() {
         result.verdict = "失败".into();
     }
-    emit(app, task_id, index, total, &file.name, "done", None, Some(result.clone()));
+    emit(
+        app,
+        task_id,
+        index,
+        total,
+        &file.name,
+        "done",
+        None,
+        Some(result.clone()),
+    );
     result
 }
 
@@ -441,10 +531,22 @@ async fn analyze_parsed(
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
     if parsed.chunks.len() <= 1 {
-        let instruction = results::build_instruction(template_content, file_name, None, output_format);
+        let instruction =
+            results::build_instruction(template_content, file_name, None, output_format);
         let content = format!("{instruction}\n\n待评审内容：\n{}", parsed.text);
         return call_with_retry(
-            app, cfg, task_id, index, total, file_name, "analyze", &content, true, retry_count, sem, cancel,
+            app,
+            cfg,
+            task_id,
+            index,
+            total,
+            file_name,
+            "analyze",
+            &content,
+            true,
+            retry_count,
+            sem,
+            cancel,
         )
         .await;
     }
@@ -452,7 +554,12 @@ async fn analyze_parsed(
     let total_chunks = parsed.chunks.len();
     let mut futures = Vec::with_capacity(total_chunks);
     for (i, chunk) in parsed.chunks.iter().enumerate() {
-        let instruction = results::build_instruction(template_content, file_name, Some((i + 1, total_chunks)), output_format);
+        let instruction = results::build_instruction(
+            template_content,
+            file_name,
+            Some((i + 1, total_chunks)),
+            output_format,
+        );
         let content = format!("{instruction}\n\n第 {} 块内容：\n{chunk}", i + 1);
         let app = app.clone();
         let cfg = cfg.clone();
@@ -464,7 +571,18 @@ async fn analyze_parsed(
             let phase = format!("analyze {}/{}", i + 1, total_chunks);
             emit(&app, &task_id, index, total, &file_name, &phase, None, None);
             let res = call_with_retry(
-                &app, &cfg, &task_id, index, total, &file_name, &phase, &content, false, retry_count, &sem, cancel,
+                &app,
+                &cfg,
+                &task_id,
+                index,
+                total,
+                &file_name,
+                &phase,
+                &content,
+                false,
+                retry_count,
+                &sem,
+                cancel,
             )
             .await;
             (i, res)
@@ -476,14 +594,29 @@ async fn analyze_parsed(
     for (i, res) in outputs {
         match res {
             Ok(text) => chunk_outputs.push(format!("【第 {} 块】\n{}", i + 1, text)),
-            Err(err) => chunk_outputs.push(format!("【第 {} 块】分析失败：{err}", i + 1)),
+            Err(err) => return Err(format!("第 {} 块分析失败，文件评审未完成：{err}", i + 1)),
         }
     }
     let merge = format!(
-        "以下是对同一文件分块评审得到的结论。请合并为一份完整、无重复的评审结论，仍以“通过/有条件通过/阻断”开头，并保留【依据】【风险】【整改项】与引用。\n\n{}",
+        "{}\n以下是对同一文件分块评审得到的结论。请合并为一份完整、无重复的评审结论，保留引用。\n\n{}",
+        results::build_instruction(template_content, file_name, None, output_format),
         chunk_outputs.join("\n\n---\n\n")
     );
-    call_with_retry(app, cfg, task_id, index, total, file_name, "merge", &merge, true, retry_count, sem, cancel).await
+    call_with_retry(
+        app,
+        cfg,
+        task_id,
+        index,
+        total,
+        file_name,
+        "merge",
+        &merge,
+        true,
+        retry_count,
+        sem,
+        cancel,
+    )
+    .await
 }
 
 /// 合并一次性：把所有文件正文合并为单一评审单元。
@@ -508,14 +641,31 @@ async fn review_combined(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        emit(app, task_id, i, total, &file.name, "parse", Some("正在解析…"), None);
-        match parse::parse_file(&PathBuf::from(&file.abs_path), &file.kind, threshold, chunk_size) {
+        emit(
+            app,
+            task_id,
+            i,
+            total,
+            &file.name,
+            "parse",
+            Some("正在解析…"),
+            None,
+        );
+        match parse::parse_file(
+            &PathBuf::from(&file.abs_path),
+            &file.kind,
+            threshold,
+            chunk_size,
+        ) {
             Ok(p) => {
                 parsed_any += 1;
                 combined.push_str(&format!("\n\n===== 文件：{} =====\n{}", file.path, p.text));
             }
             Err(err) => {
-                combined.push_str(&format!("\n\n===== 文件：{}（解析失败：{}）=====", file.path, err));
+                combined.push_str(&format!(
+                    "\n\n===== 文件：{}（解析失败：{}）=====",
+                    file.path, err
+                ));
             }
         }
     }
@@ -529,22 +679,53 @@ async fn review_combined(
             duration_ms,
             ..Default::default()
         };
-        emit(app, task_id, 0, 1, &result.file, "done", None, Some(result.clone()));
+        emit(
+            app,
+            task_id,
+            0,
+            1,
+            &result.file,
+            "done",
+            None,
+            Some(result.clone()),
+        );
         return result;
     }
-    let template_content = files.first().map(|f| f.template_content.as_str()).unwrap_or("");
+    let template_content = files
+        .first()
+        .map(|f| f.template_content.as_str())
+        .unwrap_or("");
     let parsed = parse::Parsed {
         text: combined.clone(),
         chunks: chunk::chunk_text(&combined, threshold, chunk_size),
         preview: combined.chars().take(800).collect(),
     };
     let raw = analyze_parsed(
-        app, cfg, &file_name, template_content, &parsed, output_format, task_id, 0, 1, retry_count, sem, cancel.clone(),
+        app,
+        cfg,
+        &file_name,
+        template_content,
+        &parsed,
+        output_format,
+        task_id,
+        0,
+        1,
+        retry_count,
+        sem,
+        cancel.clone(),
     )
     .await;
     let duration_ms = start.elapsed().as_millis() as u64;
     let mut result = match raw {
-        Ok(text) => results::parse_result(&file_name, None, "tpl-generic", parsed.chunks.len(), duration_ms, &text, output_format),
+        Ok(text) => results::parse_result(
+            &file_name,
+            None,
+            "tpl-generic",
+            parsed.chunks.len(),
+            duration_ms,
+            &text,
+            output_format,
+        ),
         Err(err) => FileResult {
             file: file_name.clone(),
             verdict: "失败".into(),
@@ -557,7 +738,16 @@ async fn review_combined(
     if result.error.is_some() {
         result.verdict = "失败".into();
     }
-    emit(app, task_id, 0, 1, &result.file, "done", None, Some(result.clone()));
+    emit(
+        app,
+        task_id,
+        0,
+        1,
+        &result.file,
+        "done",
+        None,
+        Some(result.clone()),
+    );
     result
 }
 
@@ -584,17 +774,35 @@ async fn call_with_retry(
             return Err("任务已取消".into());
         }
         if attempt > 0 {
-            emit(app, task_id, index, total, file, phase, Some("\n[已重试]\n"), None);
+            emit(
+                app,
+                task_id,
+                index,
+                total,
+                file,
+                phase,
+                Some("\n[已重试]\n"),
+                None,
+            );
         }
-        let permit = sem
-            .clone()
-            .acquire_owned()
-            .await
+        let permit = gateway::cancellable(sem.clone().acquire_owned(), Some(&cancel))
+            .await?
             .map_err(|_| "并发控制不可用".to_string())?;
         let result = if stream {
-            stream_into(app, cfg, task_id, index, total, file, phase, content, cancel.clone()).await
+            stream_into(
+                app,
+                cfg,
+                task_id,
+                index,
+                total,
+                file,
+                phase,
+                content,
+                cancel.clone(),
+            )
+            .await
         } else {
-            gateway::chat(cfg, content).await
+            gateway::cancellable(gateway::chat(cfg, content), Some(&cancel)).await?
         };
         drop(permit);
         match result {
@@ -628,7 +836,16 @@ async fn stream_into(
     let name = file.to_string();
     let phase = phase.to_string();
     gateway::chat_stream(cfg, content, Some(cancel), move |delta| {
-        emit(&app_for_cb, &task, index, total, &name, &phase, Some(delta), None);
+        emit(
+            &app_for_cb,
+            &task,
+            index,
+            total,
+            &name,
+            &phase,
+            Some(delta),
+            None,
+        );
     })
     .await
 }
@@ -735,7 +952,13 @@ pub fn save_task(
         block: summary.block,
         fail: summary.fail,
     };
-    store::save_task(&state.db_path, &task, &summary.results, &rule_set, &templates)
+    store::save_task(
+        &state.db_path,
+        &task,
+        &summary.results,
+        &rule_set,
+        &templates,
+    )
 }
 
 /// 内置系统、模板与规则集默认值，供「恢复内置」使用。
@@ -765,11 +988,19 @@ pub fn list_history(state: State<'_, AppState>) -> Result<Vec<TaskSummary>, Stri
 }
 
 #[tauri::command]
-pub fn get_history(state: State<'_, AppState>, id: String) -> Result<Option<store::TaskDetail>, String> {
+pub fn get_history(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<store::TaskDetail>, String> {
     store::get_task(&state.db_path, &id)
 }
 
 #[tauri::command]
 pub fn delete_history(state: State<'_, AppState>, id: String) -> Result<(), String> {
     store::delete_task(&state.db_path, &id)
+}
+
+#[tauri::command]
+pub fn export_text(path: String, content: String) -> Result<(), String> {
+    std::fs::write(path, content.as_bytes()).map_err(|e| format!("导出失败：{e}"))
 }

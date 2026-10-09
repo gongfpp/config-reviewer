@@ -24,12 +24,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
-            std::fs::create_dir_all(&data_dir).ok();
+            let data_dir = app.path().app_data_dir()?;
+            #[cfg(debug_assertions)]
+            let data_dir = config::qa_data_dir().unwrap_or(data_dir);
+            std::fs::create_dir_all(&data_dir)?;
             let workspace_root = data_dir.join("workspace");
             // 启动时清理上次会话残留的工作区。
             let _ = std::fs::remove_dir_all(&workspace_root);
-            std::fs::create_dir_all(&workspace_root).ok();
+            std::fs::create_dir_all(&workspace_root)?;
             app.manage(AppState {
                 db_path: data_dir.join("reviewer.db"),
                 workspace_root,
@@ -52,6 +54,7 @@ pub fn run() {
             commands::run_review,
             commands::summarize_system,
             commands::export_xlsx,
+            commands::export_text,
             commands::save_task,
             commands::list_history,
             commands::get_history,
@@ -60,3 +63,6 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests;

@@ -225,6 +225,9 @@ export default function App() {
     api_key: "",
     allow_http: appConfig?.allow_http ?? true,
     timeout_secs: appConfig?.timeout_secs ?? 180,
+    api_key_header: appConfig?.api_key_header ?? "",
+    proxy_url: appConfig?.proxy_url ?? "",
+    stream_enabled: appConfig?.stream_enabled ?? true,
   });
 
   const updateConfig = (patch: Partial<AppConfig>) => setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -507,14 +510,14 @@ export default function App() {
 
   const exportExcel = () => exportExcelOf(results, ruleMap);
 
-  const download = (filename: string, content: string, type: string) => {
-    const blob = new Blob([content], { type: `${type};charset=utf-8` });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+  const download = async (filename: string, content: string, _type: string) => {
+    try {
+      const extension = filename.split(".").pop() ?? "txt";
+      const path = await save({ defaultPath: filename, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
+      if (!path) return;
+      await api.exportText(path, content);
+      toast("报告已导出");
+    } catch (e) { toast(String(e)); }
   };
 
   const summarize = async (system: string) => {
@@ -1494,6 +1497,17 @@ export default function App() {
                       <input type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
                     </div>
                   </div>
+                  <div className="field">
+                    <label>API Key 请求头（留空为 Bearer）</label>
+                    <input value={appConfig.api_key_header} placeholder="留空，或 api-key / X-API-Key" onChange={(e) => updateConfig({ api_key_header: e.target.value })} />
+                  </div>
+                  <div className="field">
+                    <label>代理地址（留空直连内网）</label>
+                    <input value={appConfig.proxy_url} placeholder="可选：http://proxy.intra:8080" onChange={(e) => updateConfig({ proxy_url: e.target.value })} />
+                  </div>
+                  <label className="checkline">
+                    <input type="checkbox" checked={appConfig.stream_enabled} onChange={(e) => updateConfig({ stream_enabled: e.target.checked })} /> 使用流式响应（网关不支持时关闭）
+                  </label>
                   <label className="checkline">
                     <input type="checkbox" checked={appConfig.allow_http} onChange={(e) => updateConfig({ allow_http: e.target.checked })} /> 允许内网 HTTP（无证书网关）
                   </label>

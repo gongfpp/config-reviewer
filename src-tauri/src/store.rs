@@ -70,10 +70,14 @@ pub fn save_task(
     rule_set: &RuleSet,
     templates: &[Template],
 ) -> Result<(), String> {
-    let conn = open(db_path)?;
+    let mut conn = open(db_path)?;
+    let conn = conn.transaction().map_err(|e| e.to_string())?;
     // 同一任务重复保存（如失败项重试）时先清理旧的明细，保证幂等。
-    conn.execute("DELETE FROM task_files WHERE task_id = ?1", params![summary.id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM task_files WHERE task_id = ?1",
+        params![summary.id],
+    )
+    .map_err(|e| e.to_string())?;
     let systems = serde_json::to_string(&summary.systems).map_err(|e| e.to_string())?;
     let stats = serde_json::to_string(&(
         summary.total_files,
@@ -99,7 +103,10 @@ pub fn save_task(
     )
     .map_err(|e| e.to_string())?;
     for r in results {
-        let name = Path::new(&r.file).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let name = Path::new(&r.file)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         conn.execute(
             "INSERT INTO task_files (task_id, path, name, system, template_id, verdict, result_json, duration_ms, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -117,7 +124,7 @@ pub fn save_task(
         )
         .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    conn.commit().map_err(|e| e.to_string())
 }
 
 pub fn list_tasks(db_path: &Path) -> Result<Vec<TaskSummary>, String> {
@@ -141,8 +148,10 @@ pub fn list_tasks(db_path: &Path) -> Result<Vec<TaskSummary>, String> {
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, created_at, source_type, source_ref, systems, stats) = row.map_err(|e| e.to_string())?;
-        let stats: (u64, u64, u64, u64, u64) = serde_json::from_str(&stats).unwrap_or((0, 0, 0, 0, 0));
+        let (id, created_at, source_type, source_ref, systems, stats) =
+            row.map_err(|e| e.to_string())?;
+        let stats: (u64, u64, u64, u64, u64) =
+            serde_json::from_str(&stats).unwrap_or((0, 0, 0, 0, 0));
         out.push(TaskSummary {
             id,
             created_at,
@@ -173,7 +182,8 @@ pub fn get_task(db_path: &Path, id: &str) -> Result<Option<TaskDetail>, String> 
                 let stats: String = row.get(5).map_err(|e| e.to_string())?;
                 let rule_json: String = row.get(6).map_err(|e| e.to_string())?;
                 let tpl_json: String = row.get(7).map_err(|e| e.to_string())?;
-                let stats: (u64, u64, u64, u64, u64) = serde_json::from_str(&stats).unwrap_or((0, 0, 0, 0, 0));
+                let stats: (u64, u64, u64, u64, u64) =
+                    serde_json::from_str(&stats).unwrap_or((0, 0, 0, 0, 0));
                 (
                     TaskSummary {
                         id: row.get(0).map_err(|e| e.to_string())?,
@@ -197,14 +207,15 @@ pub fn get_task(db_path: &Path, id: &str) -> Result<Option<TaskDetail>, String> 
     let mut stmt = conn
         .prepare("SELECT result_json FROM task_files WHERE task_id = ?1 ORDER BY id ASC")
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![id], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
     let mut files = Vec::new();
     for row in rows {
-        if let Ok(json) = row {
-            if let Ok(result) = serde_json::from_str::<FileResult>(&json) {
-                files.push(result);
-            }
-        }
+        let json = row.map_err(|e| e.to_string())?;
+        files.push(
+            serde_json::from_str::<FileResult>(&json).map_err(|e| format!("历史结果损坏：{e}"))?,
+        );
     }
     Ok(Some(TaskDetail {
         summary,
@@ -232,10 +243,11 @@ pub fn prune(db_path: &Path, retention_days: u32) -> Result<(), String> {
 }
 
 pub fn delete_task(db_path: &Path, id: &str) -> Result<(), String> {
-    let conn = open(db_path)?;
+    let mut conn = open(db_path)?;
+    let conn = conn.transaction().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM task_files WHERE task_id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
-    Ok(())
+    conn.commit().map_err(|e| e.to_string())
 }

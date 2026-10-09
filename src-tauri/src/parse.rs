@@ -32,6 +32,14 @@ pub fn decode_text(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(&bytes[3..]).into_owned();
     }
+    for (bom, encoding) in [
+        (&[0xFF, 0xFE][..], encoding_rs::UTF_16LE),
+        (&[0xFE, 0xFF][..], encoding_rs::UTF_16BE),
+    ] {
+        if bytes.starts_with(bom) {
+            return encoding.decode(&bytes[2..]).0.into_owned();
+        }
+    }
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_string(),
         Err(_) => {
@@ -42,14 +50,25 @@ pub fn decode_text(bytes: &[u8]) -> String {
 }
 
 /// 解析文件为可评审文本，并按配置切块。
-pub fn parse_file(path: &Path, kind: &str, threshold: usize, chunk_size: usize) -> Result<Parsed, String> {
+pub fn parse_file(
+    path: &Path,
+    kind: &str,
+    threshold: usize,
+    chunk_size: usize,
+) -> Result<Parsed, String> {
     match kind {
         "json" => parse_json(path, threshold, chunk_size),
         "excel" => parse_excel(path, threshold, chunk_size),
         "word" => parse_word(path, threshold, chunk_size),
         "text" => {
             let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-            Ok(finish(decode_text(&bytes), threshold, chunk_size, false, None))
+            Ok(finish(
+                decode_text(&bytes),
+                threshold,
+                chunk_size,
+                false,
+                None,
+            ))
         }
         _ => Err("跳过：暂不支持解析该类型".into()),
     }
@@ -76,18 +95,23 @@ fn parse_excel(path: &Path, threshold: usize, chunk_size: usize) -> Result<Parse
     for name in names {
         let range = match workbook.worksheet_range(&name) {
             Ok(range) => range,
-            Err(_) => continue,
+            Err(e) => return Err(format!("Sheet「{name}」读取失败：{e}")),
         };
         if range.is_empty() {
             continue;
         }
         out.push_str(&format!("## Sheet: {name}\n"));
+        let first_row = range.start().map(|(row, _)| row).unwrap_or(0) as usize;
         for (row_idx, row) in range.rows().enumerate() {
             let cells: Vec<String> = row.iter().map(cell_to_string).collect();
             if cells.iter().all(|c| c.trim().is_empty()) {
                 continue;
             }
-            out.push_str(&format!("{} | {}\n", row_idx + 1, cells.join(" | ")));
+            out.push_str(&format!(
+                "{} | {}\n",
+                first_row + row_idx + 1,
+                cells.join(" | ")
+            ));
         }
         out.push('\n');
     }
@@ -117,29 +141,54 @@ fn parse_word(path: &Path, threshold: usize, chunk_size: usize) -> Result<Parsed
         .map_err(|e| e.to_string())?
         .read_to_string(&mut xml)
         .map_err(|e| e.to_string())?;
-    Ok(finish(docx_text(&xml), threshold, chunk_size, false, None))
+    Ok(finish(docx_text(&xml)?, threshold, chunk_size, false, None))
 }
 
 /// 从 WordprocessingML 中抽取文本：段落换行 + 去标签 + 实体解码。
-pub fn docx_text(xml: &str) -> String {
-    let xml = xml.replace("</w:p>", "\n").replace("<w:tab/>", "\t").replace("<w:br/>", "\n");
-    let mut out = String::with_capacity(xml.len() / 2);
-    let mut in_tag = false;
-    for ch in xml.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            c if !in_tag => out.push(c),
+pub fn docx_text(xml: &str) -> Result<String, String> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut out = String::new();
+    let mut in_text = false;
+    loop {
+        match reader
+            .read_event()
+            .map_err(|e| format!("Word XML 解析失败：{e}"))?
+        {
+            Event::Start(e) if e.local_name().as_ref() == "t" => in_text = true,
+            Event::End(e) => match e.local_name().as_ref() {
+                "t" => in_text = false,
+                "p" => out.push('\n'),
+                "tc" => {
+                    while out.ends_with('\n') {
+                        out.pop();
+                    }
+                    out.push_str(" | ");
+                }
+                "tr" => {
+                    if out.ends_with(" | ") {
+                        out.truncate(out.len() - 3);
+                    }
+                    out.push('\n');
+                }
+                _ => {}
+            },
+            Event::Empty(e) => match e.local_name().as_ref() {
+                "tab" => out.push('\t'),
+                "br" | "cr" => out.push('\n'),
+                _ => {}
+            },
+            Event::Text(e) if in_text => out.push_str(&e.as_ref()),
+            Event::GeneralRef(e) if in_text => {
+                let name = e.as_ref();
+                let encoded = format!("&{name};");
+                out.push_str(&quick_xml::escape::unescape(&encoded).map_err(|e| e.to_string())?);
+            }
+            Event::Eof => break,
             _ => {}
         }
     }
-    out.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .trim()
-        .to_string()
+    Ok(out.trim().to_string())
 }
 
 fn finish(
@@ -151,5 +200,9 @@ fn finish(
 ) -> Parsed {
     let chunks = chunks.unwrap_or_else(|| chunk_text(&text, threshold, chunk_size));
     let preview: String = text.chars().take(800).collect();
-    Parsed { text, chunks, preview }
+    Parsed {
+        text,
+        chunks,
+        preview,
+    }
 }

@@ -12,6 +12,13 @@ pub struct AppConfig {
     pub model: String,
     pub allow_http: bool,
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub api_key_header: String,
+    #[serde(default)]
+    pub proxy_url: String,
+    #[serde(default = "default_true")]
+    pub stream_enabled: bool,
+
     pub concurrency: usize,
     pub max_file_mb: u64,
     pub max_files: usize,
@@ -28,6 +35,10 @@ pub struct AppConfig {
     pub systems: Vec<SystemType>,
     pub templates: Vec<Template>,
     pub rule_sets: Vec<RuleSet>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_retry() -> usize {
@@ -47,6 +58,9 @@ impl Default for AppConfig {
             model: String::new(),
             allow_http: true,
             timeout_secs: 180,
+            api_key_header: String::new(),
+            proxy_url: String::new(),
+            stream_enabled: true,
             concurrency: 3,
             max_file_mb: 1228,
             max_files: 800,
@@ -76,7 +90,9 @@ impl AppConfig {
 fn merge_systems(defaults: Vec<SystemType>, stored: Vec<SystemType>) -> Vec<SystemType> {
     let mut result = defaults;
     for saved in stored {
-        if !result.iter().any(|s| s.id == saved.id) {
+        if let Some(index) = result.iter().position(|s| s.id == saved.id) {
+            result[index] = saved;
+        } else {
             result.push(saved);
         }
     }
@@ -129,4 +145,17 @@ pub fn save(path: &Path, config: &AppConfig) -> Result<(), String> {
     }
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     std::fs::write(path, raw).map_err(|e| e.to_string())
+}
+
+/// 隔离桌面 QA 数据，仅 debug 构建接受，发布版没有此入口。
+#[cfg(debug_assertions)]
+pub fn qa_data_dir() -> Option<std::path::PathBuf> {
+    let args: Vec<String> = std::env::args().collect();
+    let i = args.iter().position(|s| s == "--qa-data-dir")?;
+    let path = std::path::PathBuf::from(args.get(i + 1)?);
+    if path.is_absolute() && path.starts_with(std::env::temp_dir()) {
+        Some(path)
+    } else {
+        None
+    }
 }

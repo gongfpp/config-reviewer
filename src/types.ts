@@ -67,6 +67,9 @@ export interface GatewayConfig {
   api_key: string;
   allow_http: boolean;
   timeout_secs: number;
+  api_key_header: string;
+  proxy_url: string;
+  stream_enabled: boolean;
 }
 
 export interface Citation {
@@ -168,6 +171,9 @@ export interface AppConfig {
   model: string;
   allow_http: boolean;
   timeout_secs: number;
+  api_key_header: string;
+  proxy_url: string;
+  stream_enabled: boolean;
   concurrency: number;
   max_file_mb: number;
   max_files: number;

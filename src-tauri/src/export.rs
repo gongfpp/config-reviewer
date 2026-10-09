@@ -13,7 +13,15 @@ pub struct ExportRow {
     pub time: String,
 }
 
-const HEADERS: [&str; 7] = ["系统", "文件路径", "文件类型", "命中规则", "结论", "引用", "时间"];
+const HEADERS: [&str; 7] = [
+    "系统",
+    "文件路径",
+    "文件类型",
+    "命中规则",
+    "结论",
+    "引用",
+    "时间",
+];
 
 pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
     let mut workbook = Workbook::new();

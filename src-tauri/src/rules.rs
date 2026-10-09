@@ -114,7 +114,11 @@ pub fn resolve(rule_set: &RuleSet, rel_path: &str, name: &str) -> Option<(String
             continue;
         }
         if pattern_matches(&rule.pattern, rel_path, name) {
-            return Some((rule.id.clone(), rule.system.clone(), rule.template_id.clone()));
+            return Some((
+                rule.id.clone(),
+                rule.system.clone(),
+                rule.template_id.clone(),
+            ));
         }
     }
     None

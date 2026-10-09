@@ -1,0 +1,3 @@
+# 将 MSVC C/C++ 运行库静态链接进 Windows 主程序，避免断网电脑另装 VC++ Redistributable。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
