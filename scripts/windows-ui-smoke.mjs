@@ -11,7 +11,7 @@ const executable = process.argv[2];
 if (!executable) throw new Error('Expected installed EXE path');
 const root = await mkdtemp(path.join(tmpdir(), 'reviewer-ui-'));
 const inputs = path.join(root, '中文发布包'); await mkdir(inputs);
-await writeFile(path.join(inputs, 'apollo-config.json'), '{"retry":3}', 'utf8');
+await writeFile(path.join(inputs, 'APOLLO-config.JSON'), '{"retry":3}', 'utf8');
 const reply = '有条件通过\n【依据】\n- 已配置重试\n【风险】\n- 缺少监控告警\n【整改项】\n- 补充告警阈值\n引用：$.retry | 3';
 let requestCount = 0;
 const server = http.createServer(async (req, res) => {
@@ -64,7 +64,7 @@ try {
   await page.getByRole('button', { name: '扫描本地目录', exact: true }).click();
   await page.locator('input[placeholder*="2026Q3-mixed"]').fill(inputs);
   await page.getByRole('button', { name: '下一步：扫描解析 →', exact: true }).click();
-  await page.getByText('apollo-config.json', { exact: true }).first().waitFor();
+  await page.getByText('APOLLO-config.JSON', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: '预览', exact: true }).click();
   assert.match(await page.locator('.preview-box').textContent().catch(() => page.locator('body').textContent()), /retry/);
   await page.getByRole('button', { name: '下一步：评审配置 →', exact: true }).click();
@@ -72,6 +72,8 @@ try {
   await page.getByRole('heading', { name: '确认数据去向' }).waitFor();
   await page.getByRole('button', { name: '确认并开始', exact: true }).click();
   await page.getByRole('button', { name: '取消评审', exact: true }).waitFor();
+  for (let i = 0; i < 100 && requestCount < 2; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(requestCount >= 2, 'Review must reach the gateway before overlapping command probes');
   const overlap = await page.evaluate(async ({ inputs, gateway }) => {
     const invoke = window.__TAURI_INTERNALS__.invoke;
     const errors = [];
@@ -116,7 +118,7 @@ try {
   await page.getByRole('button', { name: /评审历史/ }).click();
   await page.getByText(inputs, { exact: false }).waitFor();
   await page.getByRole('button', { name: '查看', exact: true }).click();
-  await page.getByText('apollo-config.json', { exact: true }).first().waitFor();
+  await page.getByText('APOLLO-config.JSON', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: /模型与规则/ }).click();
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await page.getByText('连接正常：可用', { exact: true }).waitFor();

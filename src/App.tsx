@@ -124,6 +124,7 @@ export default function App() {
 
   const noticeTimer = useRef<number | null>(null);
   const activeReviewRef = useRef<string | null>(null);
+  const analysisRevisionRef = useRef(0);
 
   const toast = useCallback((message: string) => {
     setNotice(message);
@@ -316,6 +317,7 @@ export default function App() {
 
   const runRequest = async (files: ReviewFileInput[]) => {
     if (!scan || !appConfig) throw new Error("任务未就绪");
+    analysisRevisionRef.current += 1;
     activeReviewRef.current = scan.task_id;
     return api.runReview({
       task_id: scan.task_id,
@@ -345,6 +347,7 @@ export default function App() {
 
   const autoSummarize = async (list: FileResult[]) => {
     if (!appConfig || appConfig.granularity !== "per_file_system") return;
+    const revision = analysisRevisionRef.current;
     const ids = Array.from(new Set(list.map((r) => r.system ?? "other")));
     for (const sys of ids) {
       const items = list.filter((r) => (r.system ?? "other") === sys);
@@ -355,6 +358,7 @@ export default function App() {
           systemName: systemName(sys),
           files: items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks })),
         });
+        if (revision !== analysisRevisionRef.current) return;
         setSummaries((prev) => ({ ...prev, [sys]: text }));
       } catch {
         // 自动汇总失败不阻断主流程
@@ -416,6 +420,8 @@ export default function App() {
       setResults(merged);
       setSummary(next);
       await persistTask(next);
+      setSummaries({});
+      await autoSummarize(merged);
       toast(`已重试 ${files.length} 个失败项`);
     } catch (e) {
       toast(String(e));
@@ -530,6 +536,8 @@ export default function App() {
   };
 
   const summarize = async (system: string) => {
+    const revision = analysisRevisionRef.current;
+    const owner = activeReviewRef.current;
     const items = results.filter((r) => (r.system ?? "other") === system);
     if (items.length === 0) return;
     const files: SystemFileSummary[] = items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks }));
@@ -539,6 +547,7 @@ export default function App() {
         systemName: systemName(system),
         files,
       });
+      if (owner !== activeReviewRef.current || revision !== analysisRevisionRef.current) return;
       setSummaries((prev) => ({ ...prev, [system]: text }));
       toast(`已生成 ${systemName(system)} 汇总`);
     } catch (e) {
@@ -1084,6 +1093,7 @@ export default function App() {
                       <span className="muted" style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12 }}>
                         {doneCount} / {progressList.length || selectedEntries.length}
                       </span>
+                      {running && <button className="btn btn-sm" style={{ marginLeft: 12 }} onClick={cancelReview}>取消评审</button>}
                     </div>
                     <div className="bar">
                       <i style={{ width: `${progressList.length ? (doneCount / progressList.length) * 100 : 0}%` }} />

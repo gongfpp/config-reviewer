@@ -662,3 +662,17 @@ fn inline_standard_sections_and_missing_sections() {
     let missing = results::parse_result("a", None, "t", 1, 0, "通过", "standard");
     assert!(missing.error.is_some());
 }
+
+#[test]
+fn windows_globs_ignore_case_and_accept_backslashes() {
+    assert!(rules::pattern_matches(
+        "*apollo*.json",
+        "configs/APOLLO-export.JSON",
+        "APOLLO-export.JSON"
+    ));
+    assert!(rules::pattern_matches(
+        "星云\\**",
+        "星云/中文.CONF",
+        "中文.CONF"
+    ));
+}
