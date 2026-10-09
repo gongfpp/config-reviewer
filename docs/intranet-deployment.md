@@ -4,7 +4,7 @@
 
 ## 交付与安装
 
-交付物为 `ConfigReviewer-0.1.2-windows-x64-offline.zip`，包含 NSIS 安装 EXE、此说明、环境检查脚本和 SHA256 清单。EXE 内置 Microsoft WebView2 **完整离线安装器**，不是仍需联网的 bootstrapper。主程序静态链接 MSVC CRT，不要求另装 Node、Rust、Office、SQLite 或 VC++ Redistributable。
+交付物为 `ConfigReviewer-0.1.2-windows-x64-offline.zip`，包含 NSIS 安装 EXE、此说明、环境检查脚本、源码版本记录 `build-info.json` 和 SHA256 清单。EXE 内置 Microsoft WebView2 **完整离线安装器**，不是仍需联网的 bootstrapper。主程序静态链接 MSVC CRT，不要求另装 Node、Rust、Office、SQLite 或 VC++ Redistributable。
 
 1. 在允许联网的电脑下载完整 ZIP，按内网介质管理流程导入。
 2. 使用 `Get-FileHash .\ConfigReviewer_0.1.2_x64-setup.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 核对文件；实际 EXE 名以压缩包内容为准。

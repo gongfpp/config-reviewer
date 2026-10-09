@@ -10,6 +10,9 @@ if ($installers[0].Length -lt 50MB) { throw 'Installer is unexpectedly small: of
 Copy-Item $installers[0].FullName $stage
 Copy-Item (Join-Path $root 'docs/intranet-deployment.md') (Join-Path $stage '安装与兼容性说明.md')
 Copy-Item (Join-Path $root 'scripts/check-intranet.ps1') $stage
+$metadata = if (Test-Path (Join-Path $root '.build-source.json')) { Get-Content (Join-Path $root '.build-source.json') -Raw | ConvertFrom-Json } else { @{ source_commit = 'unknown' } }
+$buildInfo = @{ version = $version; source_commit = $metadata.source_commit; platform = 'Windows x64'; webview_install_mode = 'offlineInstaller'; msvc_crt = 'static'; code_signed = $false }
+$buildInfo | ConvertTo-Json | Set-Content (Join-Path $stage 'build-info.json') -Encoding utf8
 $hashes = Get-ChildItem $stage -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
 $hashes | Set-Content (Join-Path $stage 'SHA256SUMS.txt') -Encoding utf8
 $archive = Join-Path $root "artifacts/ConfigReviewer-$version-windows-x64-offline.zip"
