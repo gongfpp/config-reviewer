@@ -73,14 +73,18 @@ pub fn parse_result(
         }
     }
     let verdict = detect_verdict(raw);
+    let (basis, risks, remediations) = split_sections(raw);
     let error = if output_format == "json" {
         Some("模型未返回合法的评审 JSON".to_string())
     } else if verdict == "未识别结论" {
         Some("模型输出缺少有效结论，请重试".to_string())
+    } else if output_format == "standard"
+        && (basis.is_empty() || risks.is_empty() || remediations.is_empty())
+    {
+        Some("标准结论缺少依据、风险或整改项，请重试".to_string())
     } else {
         None
     };
-    let (basis, risks, remediations) = split_sections(raw);
     let citations = extract_citations(file, raw);
     FileResult {
         file: file.to_string(),
@@ -217,6 +221,7 @@ pub fn detect_verdict(raw: &str) -> String {
 }
 
 fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+    #[derive(Clone, Copy)]
     enum Section {
         None,
         Basis,
@@ -226,37 +231,45 @@ fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut section = Section::None;
     let (mut basis, mut risks, mut fixes) = (Vec::new(), Vec::new(), Vec::new());
     for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+        let normalized = line.trim().trim_start_matches(['#', '*', '-', ' ']);
+        let mut item = normalized;
+        for (name, next) in [
+            ("依据", Section::Basis),
+            ("标准依据", Section::Basis),
+            ("风险", Section::Risk),
+            ("主要风险", Section::Risk),
+            ("整改项", Section::Fix),
+            ("整改建议", Section::Fix),
+            ("建议", Section::Fix),
+        ] {
+            let bracket = format!("【{name}】");
+            let rest = normalized
+                .strip_prefix(&bracket)
+                .or_else(|| normalized.strip_prefix(&format!("{name}：")))
+                .or_else(|| normalized.strip_prefix(&format!("{name}:")));
+            if let Some(rest) = rest {
+                section = next;
+                item = rest.trim_start_matches(['*', ' ', '：', ':']);
+                break;
+            }
+            if normalized.trim_end_matches(['*', ' ', '：', ':']) == name {
+                section = next;
+                item = "";
+                break;
+            }
         }
-        let header = trimmed.trim_matches(['#', '*', '-', ' ', '【', '】', '：', ':']);
-        if matches!(header, "依据" | "标准依据") {
-            section = Section::Basis;
-            continue;
-        }
-        if matches!(header, "风险" | "主要风险") {
-            section = Section::Risk;
-            continue;
-        }
-        if matches!(header, "整改项" | "整改建议" | "建议") {
-            section = Section::Fix;
-            continue;
-        }
-        if trimmed.starts_with("引用") {
-            continue;
-        }
-        let item = trimmed
+        let item = item
+            .trim()
             .trim_start_matches(['-', '*', '•', ' '])
             .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '、')
             .trim();
-        if item.is_empty() {
+        if item.is_empty() || item.starts_with("引用") {
             continue;
         }
         match section {
-            Section::Basis => basis.push(item.to_string()),
-            Section::Risk => risks.push(item.to_string()),
-            Section::Fix => fixes.push(item.to_string()),
+            Section::Basis => basis.push(item.into()),
+            Section::Risk => risks.push(item.into()),
+            Section::Fix => fixes.push(item.into()),
             Section::None => {}
         }
     }

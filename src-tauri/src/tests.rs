@@ -642,3 +642,21 @@ fn unreadable_directory_is_not_silently_omitted() {
     std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
 }
+
+#[test]
+fn inline_standard_sections_and_missing_sections() {
+    let good = results::parse_result(
+        "a",
+        None,
+        "t",
+        1,
+        0,
+        "通过\n**【依据】** 配置齐全\n【风险】无\n整改项：无",
+        "standard",
+    );
+    assert!(good.error.is_none());
+    assert_eq!(good.basis, vec!["配置齐全"]);
+    assert_eq!(good.risks, vec!["无"]);
+    let missing = results::parse_result("a", None, "t", 1, 0, "通过", "standard");
+    assert!(missing.error.is_some());
+}

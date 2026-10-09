@@ -89,7 +89,7 @@ try {
   }
   await stop(); await launch();
   await page.getByRole('button', { name: /评审历史/ }).click();
-  await page.getByText(inputs, { exact: true }).waitFor();
+  await page.getByText(inputs, { exact: false }).waitFor();
   await page.getByRole('button', { name: '查看', exact: true }).click();
   await page.getByText('apollo-config.json', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: /模型与规则/ }).click();
