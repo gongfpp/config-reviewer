@@ -55,3 +55,5 @@ Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https:
 ## 内网二次修改
 
 源码修改后可直接构建和运行 EXE，无需重新生成安装包。入口为 `scripts/build-and-run.ps1 -Test -Run`，源码目录、离线依赖与工具链条件见 [内网开发说明](docs/onsite-development.md)。规则、Prompt 和模型配置可直接在界面保存，无需编译。
+
+目标 Windows 10 电脑没有开发环境和外网时，使用[完整离线开发包](docs/offline-development-kit.md)。它同时提供源码、npm/Cargo 依赖、Node、Rust、C++ Build Tools/Windows 10 SDK、WebView2/.NET/VC++ 离线安装程序和便携编辑器。入口依次为 `1-install-environment.cmd`、`2-build-test-run.cmd`、`3-edit-source.cmd`；包内工具在构建进程内启用。

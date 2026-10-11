@@ -45,6 +45,9 @@ async function launch() {
   if (!page) throw new Error('Application page not found');
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', { name: /模型与规则/ }).waitFor();
+  if (process.env.REVIEWER_EXPECT_SOURCE_EDIT) {
+    assert.ok((await page.locator('body').textContent()).includes(process.env.REVIEWER_EXPECT_SOURCE_EDIT), 'The rebuilt application must show the edited source text');
+  }
 }
 async function stop() {
   if (browser) { await browser.close(); browser = undefined; }

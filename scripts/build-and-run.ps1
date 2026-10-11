@@ -4,6 +4,9 @@ param([switch]$Release, [switch]$Run, [switch]$Test, [switch]$Online)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+if (Test-Path (Join-Path $root 'tools/TOOLS-INFO.json')) {
+  . "$PSScriptRoot/enter-dev-environment.ps1"
+}
 foreach ($tool in @('node','npm','cargo','rustc')) {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required tool not found: $tool. See docs/onsite-development.md." }
 }

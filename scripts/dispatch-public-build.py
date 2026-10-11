@@ -13,7 +13,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 REPO = 'gongfpp/config-reviewer-builds'
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument('--workflow', default='windows.yml', choices=['windows.yml', 'source-kit.yml'])
+parser.add_argument('--workflow', default='windows.yml', choices=['windows.yml', 'source-kit.yml', 'development-kit.yml'])
+parser.add_argument('--tools-run', help='Verified public tool-preparation workflow run ID')
 options = parser.parse_args()
 
 def run(args, *, input=None, check=True):
@@ -45,5 +46,8 @@ with tempfile.TemporaryDirectory(prefix='reviewer-encrypted-build-') as temp:
         notes.write_text('临时 AES-GCM 加密构建输入，不包含明文源码。成功构建后清除输入及对应 Secret。')
         run(['gh', 'release', 'create', tag, '--repo', REPO, '--target', 'main', '--title', f'临时加密构建输入 {sha}', '--notes-file', str(notes)])
     run(['gh', 'release', 'upload', tag, str(asset), '--repo', REPO, '--clobber'])
-run(['gh', 'workflow', 'run', options.workflow, '--repo', REPO, '-f', f'source_tag={tag}'])
+arguments = ['gh', 'workflow', 'run', options.workflow, '--repo', REPO, '-f', f'source_tag={tag}']
+if options.tools_run:
+    arguments += ['-f', f'tools_run={options.tools_run}']
+run(arguments)
 print(f'已启动 public Windows 构建：源码 {sha}，输入 {tag}')

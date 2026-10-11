@@ -1,6 +1,6 @@
 # 内网源码修改与直接运行
 
-目标是在 Windows 10/11 x64 内网电脑上用 LLM 修改源码，然后直接编译运行 EXE。此流程不生成 NSIS/MSI，不下载或打包 WebView2 安装器。
+目标是在 Windows 10/11 x64 内网电脑上用 LLM 修改源码，然后直接编译运行 EXE。此流程不生成 NSIS/MSI。没有开发环境的电脑请使用[完整离线开发包](offline-development-kit.md)：包内提供工具链和 WebView2 离线安装程序。
 
 ## 交付内容与环境条件
 
@@ -8,7 +8,7 @@
 
 离线依赖包解压到源码根目录：提供 Windows npm 缓存及 Cargo vendored sources，并补充 `.cargo/config.toml` 的 source replacement。它解决第三方依赖下载，不是 Windows 开发工具链安装器。
 
-开发电脑需已有：
+旧版源码+依赖包需要电脑已有以下环境；新版完整开发包已携带这些工具，由 `1-install-environment.cmd` 离线安装或启用：
 
 - Node.js 22 LTS 与 npm（验证环境 Node 22.23.3）；
 - Rust MSVC 工具链（验证环境 Rust 1.99.0 / x86_64-pc-windows-msvc）；
