@@ -12,6 +12,14 @@
 4. 双击 `3-edit-source.cmd` 打开包内 VS Code；也可以让内网 LLM 修改源码。修改后先关闭正在运行的应用，再重新执行 `2-build-test-run.cmd`，避免 Windows 锁住旧 EXE。仅使用已缓存依赖的改动无需外网。
 5. `4-run-prebuilt.cmd` 可运行包内现成的独立 EXE（环境安装后可用）；它不会自动包含后来修改的源码。修改后的应用位于 `src-tauri\target\x86_64-pc-windows-msvc\debug\config-reviewer.exe`。
 
+复制完成后可以用 Windows 自带命令校验 ZIP；结果应与随附 `FULL-KIT-SHA256.txt` 一致：
+
+```powershell
+Get-FileHash .\ConfigReviewer-0.1.4-windows-x64-full-development-kit.zip -Algorithm SHA256
+# 首次解压后，可逐文件检查完整包；修改源码后原始源码哈希发生变化是正常的
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-kit.ps1
+```
+
 使用命令行时，打开普通 64 位 Windows PowerShell：
 
 ```powershell
@@ -24,7 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-and-run.ps1 
 
 ## 包内内容
 
-完整 React / TypeScript / Rust 源码、锁文件、图标、测试和修改指南；Windows npm 缓存和 Cargo vendor；Node 22.23.3 与 npm；Rust 1.99.0 MSVC（cargo、rustc、标准库、rustfmt、clippy，独立工具，无需 rustup）；Visual Studio 2022 C++ Build Tools 的完整离线布局和 Windows 10 SDK 10.0.19041.0；微软签名证书；WebView2 x64 完整离线安装程序；.NET Framework 4.8 离线安装程序；VC++ x64 运行库；VS Code 便携编辑器；独立应用 EXE；安装/构建入口、逐文件 SHA256 和验证证据。
+0.1.4 完整 React / TypeScript / Rust 源码、锁文件、图标、59 项回归测试和修改指南；Windows npm 缓存和 Cargo vendor；Node 22.23.3 与 npm；Rust 1.99.0 MSVC（cargo、rustc、标准库、rustfmt、clippy，独立工具，无需 rustup）；Visual Studio 2022 C++ Build Tools 的完整离线布局和 Windows 10 SDK 10.0.19041.0；微软签名证书；WebView2 x64 完整离线安装程序；.NET Framework 4.8 离线安装程序；VC++ x64 运行库；VS Code 便携编辑器；独立应用 EXE；安装/构建入口、逐文件 SHA256 和验证证据。
 
 Node、Rust 不改全局 PATH，不安装到用户 `.cargo`，每次构建在进程内启用包内版本。C++ 工具和系统运行时需要管理员安装；企业策略禁止安装、执行或导入微软证书时需要管理员按企业流程放行。安装日志在 `.offline\install-logs`，微软详细安装日志在 `%TEMP%\dd_*.log`。
 

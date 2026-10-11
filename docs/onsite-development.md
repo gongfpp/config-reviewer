@@ -4,7 +4,7 @@
 
 ## 交付内容与环境条件
 
-源码包包含完整 React/TypeScript、Rust、图标、配置、锁文件、34 项回归测试和文档；不含个人 API Key、评审历史、GitHub 凭据或 Git 历史。
+源码包包含完整 React/TypeScript、Rust、图标、配置、锁文件、59 项回归测试和文档；不含个人 API Key、评审历史、GitHub 凭据或 Git 历史。
 
 离线依赖包解压到源码根目录：提供 Windows npm 缓存及 Cargo vendored sources，并补充 `.cargo/config.toml` 的 source replacement。它解决第三方依赖下载，不是 Windows 开发工具链安装器。
 
@@ -58,7 +58,7 @@ Rust 文件位于 src-tauri/src。修改前后保持 TypeScript 与 Rust 字段�
 
 ## 业务配置无需编译
 
-「模型与规则」「模板管理」里的网关地址、模型、Key 请求头、并发、分块参数、文件规则和评审 Prompt 都可直接保存。先用内网业务样例调整这些配置，只有软件行为不满足需求时才修改代码。
+「模型与运行」「评审模块」里的网关地址、模型、Key 请求头、并发、分块参数、文件匹配条件和评审规范 都可直接保存。先用内网业务样例调整这些配置，只有软件行为不满足需求时才修改代码。
 
 ## 证据与边界
 
