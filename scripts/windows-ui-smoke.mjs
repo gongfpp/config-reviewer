@@ -55,6 +55,21 @@ const artifacts = path.resolve('artifacts/ui-smoke'); await mkdir(artifacts, { r
 let app, browser, page;
 let appOutput = '';
 const errors = [];
+const ciPolicies = [];
+function configureCiWebview() {
+  // Runtime 150+ ignores user environment overrides for elevated hosts.
+  // Only disposable CI receives temporary machine policies; user entrypoints never do.
+  if (process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') return;
+  const name = path.basename(executable);
+  for (const [setting, value] of [['AdditionalBrowserArguments', '--remote-debugging-port=9222'], ['UserDataFolder', path.join(root, 'webview')]]) {
+    const key = `HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\${setting}`;
+    let existing = false;
+    try { execFileSync('reg.exe', ['query', key, '/v', name], { stdio: 'pipe' }); existing = true; } catch {}
+    if (existing) throw new Error(`Refusing to overwrite existing CI WebView2 policy: ${key} ${name}`);
+    execFileSync('reg.exe', ['add', key, '/v', name, '/t', 'REG_SZ', '/d', value, '/f'], { stdio: 'pipe' });
+    ciPolicies.push([key, name]);
+  }
+}
 async function launch() {
   app = spawn(executable, ['--qa-data-dir', path.join(root, 'appdata')], { env: { ...process.env, PATH: process.env.REVIEWER_RUNTIME_PATH || process.env.PATH, APPDATA: path.join(root, 'appdata'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222', WEBVIEW2_USER_DATA_FOLDER: path.join(root, 'webview') } });
@@ -115,6 +130,7 @@ async function scanInputs() {
 }
 let scanRequestBaseline = 0;
 try {
+  configureCiWebview();
   await launch();
   await page.getByRole('button', { name: /模型与运行/ }).click();
   await page.getByPlaceholder('http://llm-gateway.intra.corp/v1').fill(gateway);
@@ -231,7 +247,7 @@ try {
   assert.equal(gatewayErrors.length, 0, gatewayErrors.join("\n"));
   assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 5);
   await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount, executable,
-    sourceEditExpected: process.env.REVIEWER_EXPECT_SOURCE_EDIT || null, runtimePathIsolated: Boolean(process.env.REVIEWER_RUNTIME_PATH),
+    sourceEditExpected: process.env.REVIEWER_EXPECT_SOURCE_EDIT || null, ciWebviewPolicy: ciPolicies.length > 0, runtimePathIsolated: Boolean(process.env.REVIEWER_RUNTIME_PATH),
     checked: ['real Windows EXE', 'WebView2', 'settings and key persistence', 'module creation and save', 'module fields survive restart', 'module edit invalidates scan', 'filename keyword maps DOC and TXT to one module', 'current input/review/output instructions reach gateway', 'local scan sends no model requests', 'stream connection', 'Chinese directory', 'legacy DOC Chinese body and table preview', 'DOC and TXT content sent to gateway', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history', 'GUI cancellation and retry'],
     limitation: 'Save dialog response was stubbed; other Tauri IPC and file writes used the real Windows application.' }, null, 2));
   console.log('Windows application UI smoke passed');
@@ -239,4 +255,10 @@ try {
   if (page) await page.screenshot({ path: path.join(artifacts, 'failure.png') }).catch(() => {});
   await writeFile(path.join(artifacts, 'failure.txt'), [String(error), ...gatewayErrors, ...errors].join('\n'));
   throw error;
-} finally { await stop(); server.close(); }
+} finally {
+  await stop(); server.close();
+  for (const [key, name] of ciPolicies) {
+    try { execFileSync('reg.exe', ['delete', key, '/v', name, '/f'], { stdio: 'pipe' }); }
+    catch (error) { console.error('Cannot remove temporary CI WebView2 policy:', String(error)); process.exitCode = 1; }
+  }
+}
