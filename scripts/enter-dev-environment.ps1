@@ -13,19 +13,30 @@ foreach ($required in @((Join-Path $node 'node.exe'),(Join-Path $rust 'cargo.exe
 $bootstrap = Join-Path ([IO.Path]::GetTempPath()) ('reviewer-env-' + [Guid]::NewGuid().ToString('N') + '.cmd')
 try {
   # Carry Unicode paths through the environment rather than an OEM-encoded batch file.
-  $env:REVIEWER_VS_DEVCMD = $devcmd
-  $originalOutputEncoding = [Console]::OutputEncoding
-  [Console]::OutputEncoding = [Text.Encoding]::Unicode
   [IO.File]::WriteAllLines($bootstrap,@('@echo off','call "%REVIEWER_VS_DEVCMD%" -no_logo -arch=x64 -host_arch=x64 -winsdk=10.0.19041.0 >nul','if errorlevel 1 exit /b %errorlevel%','set'),[Text.Encoding]::ASCII)
-  $environment = & cmd.exe /u /d /c call $bootstrap
-  if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize the packaged C++ toolchain.' }
+  $start = New-Object Diagnostics.ProcessStartInfo
+  $start.FileName = Join-Path $env:WINDIR 'System32/cmd.exe'
+  $start.Arguments = '/u /d /c call "' + $bootstrap + '"'
+  $start.UseShellExecute = $false
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $start.StandardOutputEncoding = [Text.Encoding]::Unicode
+  $start.StandardErrorEncoding = [Text.Encoding]::Unicode
+  $start.EnvironmentVariables['REVIEWER_VS_DEVCMD'] = $devcmd
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $start
+  [void]$process.Start()
+  $output = $process.StandardOutput.ReadToEnd()
+  $errorOutput = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  if ($process.ExitCode -ne 0) { throw "Cannot initialize the packaged C++ toolchain: $errorOutput" }
+  $environment = $output -split '\r?\n'
 } finally {
-  if ($originalOutputEncoding) { [Console]::OutputEncoding = $originalOutputEncoding }
-  Remove-Item Env:/REVIEWER_VS_DEVCMD -ErrorAction SilentlyContinue
+  if ($process) { $process.Dispose() }
   if (Test-Path $bootstrap) { [IO.File]::Delete($bootstrap) }
 }
 foreach ($line in $environment) {
-  if ($line -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1],$matches[2],'Process') }
+  if ($line -match '^([^=]+)=(.*)$' -and $matches[1] -ne 'REVIEWER_VS_DEVCMD') { [Environment]::SetEnvironmentVariable($matches[1],$matches[2],'Process') }
 }
 $env:PATH = "$node;$rust;$env:PATH"
 $env:CARGO_HOME = Join-Path $kitRoot '.offline/cargo-home'

@@ -10,6 +10,14 @@ Start-Transcript artifacts/dev-kit-test/full-test.log
 $profiles = @(Get-NetFirewallProfile | Select-Object Name,Enabled,DefaultOutboundAction)
 $before = @{ os=(Get-CimInstance Win32_OperatingSystem).Caption; existing_compilers_removed=$false; tool_paths_isolated=$false; all_external_outbound_blocked=$false; target_windows10_tested=$false }
 try {
+  foreach ($name in @('install-offline-environment.ps1','enter-dev-environment.ps1','verify-kit.ps1','build-and-run.ps1')) {
+    $tokens, $parseErrors = $null, $null
+    [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $name),[ref]$tokens,[ref]$parseErrors) | Out-Null
+    if ($parseErrors) { throw "PowerShell 5.1 syntax error in $name`: $parseErrors" }
+  }
+  # Validate the firewall command before spending time removing preinstalled VS.
+  New-NetFirewallRule -Name ReviewerOfflineAcceptance -DisplayName ReviewerOfflineAcceptance -Direction Outbound -Action Block -RemoteAddress Any -Profile Any -Enabled False | Out-Null
+  Write-Output 'Removing preinstalled C++ compiler instances from this disposable runner.'
   # Remove the runner's compiler installation rather than accidentally validating it.
   $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer'
   $vswhere = Join-Path $vsInstaller 'vswhere.exe'
@@ -23,6 +31,7 @@ try {
     if ($remaining) { throw 'A preinstalled C++ toolchain is still registered.' }
   }
   $before.existing_compilers_removed = $true
+  Write-Output 'Preinstalled C++ toolchain removed.'
   # Hide global Node/Rust and use an empty Cargo cache; Windows tools remain available.
   $env:PATH = "$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\WindowsPowerShell\v1.0"
   foreach ($tool in @('node','npm','cargo','rustc','cl','link')) {
@@ -44,8 +53,15 @@ try {
   $before.sdk19041_preinstalled = Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Include/10.0.19041.0')
   # Block external traffic for every process, including installer service children.
   # Loopback is excluded by the Windows firewall, so the local mock LLM stays usable.
-  New-NetFirewallRule -Name ReviewerOfflineAcceptance -DisplayName ReviewerOfflineAcceptance -Direction Outbound -Action Block -RemoteAddress @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0') -Profile Any | Out-Null
+  Enable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
   Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+  $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0)
+  $clientProbe = New-Object Net.Sockets.TcpClient
+  try {
+    $listener.Start()
+    $connection = $clientProbe.ConnectAsync('127.0.0.1',$listener.LocalEndpoint.Port)
+    if (-not $connection.Wait(3000) -or -not $clientProbe.Connected) { throw 'Loopback traffic was blocked; local test gateway cannot run.' }
+  } finally { $clientProbe.Dispose(); $listener.Stop() }
   try {
     $probe = Invoke-WebRequest 'https://www.microsoft.com' -UseBasicParsing -TimeoutSec 8
     throw 'External network probe unexpectedly succeeded.'
@@ -54,6 +70,7 @@ try {
     $before.external_probe_failed = $_.Exception.Message
   }
   $before.all_external_outbound_blocked = $true
+  Write-Output 'External traffic blocked; loopback connectivity verified. Installing the supplied offline environment.'
   $before | ConvertTo-Json | Set-Content artifacts/dev-kit-test/isolation.json -Encoding UTF8
   # Windows PowerShell 5.1 parses and runs the user entrypoints, not pwsh 7.
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-offline-environment.ps1 -InstallPath 'C:\ReviewerBuildTools'
