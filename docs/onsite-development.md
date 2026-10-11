@@ -29,7 +29,7 @@ powershell -File .\scripts\build-and-run.ps1 -Test -Run
 powershell -File .\scripts\build-and-run.ps1 -Release -Run
 ```
 
-脚本默认断网构建。没有离线依赖且允许使用内网 npm/Cargo 镜像时，可按单位的镜像配置运行 `-Online` 模式。这个参数允许依赖解析联网，不改变应用的 LLM 网关配置。
+脚本默认断网构建。完整开发包的环境脚本强制启用 npm/Cargo 离线模式；新增未缓存依赖需要重新准备依赖包。`-Online` 用于不带完整工具目录的轻量源码包，可按单位 npm/Cargo 镜像配置解析依赖，不改变应用的 LLM 网关配置。
 
 直接运行输出：`src-tauri\target\x86_64-pc-windows-msvc\debug\config-reviewer.exe`（或 `release`）。EXE 嵌入前端资源，启动时不需要 npm/Vite 服务。复制新 EXE 到自己的运行目录即可测试；保留已有应用标识以继续使用原配置和历史。
 
