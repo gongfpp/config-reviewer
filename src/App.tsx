@@ -108,6 +108,7 @@ export default function App() {
   const [reviewTotal, setReviewTotal] = useState(0);
   const [reviewStage, setReviewStage] = useState("");
   const [connectionTesting, setConnectionTesting] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [summarizing, setSummarizing] = useState<string | null>(null);
   const [preview, setPreview] = useState("选择文件可预览解析后的文本…");
@@ -255,6 +256,7 @@ export default function App() {
   const updateConfig = (patch: Partial<AppConfig>) => {
     setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
     setConfigDirty(true);
+    if (["base_url", "model", "api_key_header", "proxy_url", "allow_http"].some((key) => key in patch)) setConnectionResult(null);
     if (patch.systems || patch.templates || patch.rule_sets) {
       setScan(null);
       setStep(1);
@@ -715,10 +717,10 @@ export default function App() {
         </button>
         <div className="sidebar-foot">
           <div className="conn">
-            <span className="dot" />
+            <span className="dot" style={{ background: connectionResult ? (connectionResult.ok ? "var(--ok)" : "var(--danger)") : "var(--muted)" }} />
             <span>
-              <strong>{appConfig?.base_url ? "内网网关" : "未配置"}</strong>
-              {appConfig?.base_url ? (hasKey ? " · 已就绪" : " · 缺 Key") : " · 请设置"}
+              <strong>{appConfig?.base_url ? "模型服务" : "未配置"}</strong>
+              {appConfig?.base_url ? (connectionResult ? (connectionResult.ok ? " · 连接正常" : " · 连接失败") : hasKey ? " · 已配置" : " · 缺 Key") : " · 请设置"}
             </span>
           </div>
           <div className="ver">{appVersion ? `v${appVersion}` : ""} · Tauri</div>
@@ -738,7 +740,7 @@ export default function App() {
               {view === "task" && "上传混合发布包 → 识别模块 → 分模块评审"}
               {view === "history" && "本机任务与文件级结果"}
               {view === "templates" && "文件匹配 → 评审规范 → 模型输出"}
-              {view === "settings" && "内网网关、凭据与运行容量"}
+              {view === "settings" && "模型连接、凭据与运行容量"}
             </div>
           </div>
           <div className="topbar-actions">
@@ -777,7 +779,7 @@ export default function App() {
               {[
                 ["1", "选择来源", "ZIP / 目录 / 文本"],
                 ["2", "扫描与解析", "识别评审模块"],
-                ["3", "评审配置", "粒度 / 并发 / 分块"],
+                ["3", "确认评审", "确认范围与输出"],
                 ["4", "分析结果", "按模块分组"],
               ].map(([num, title, sub]) => (
                 <div
@@ -1001,7 +1003,7 @@ export default function App() {
             {step === 3 && (
               <div className="panel">
                 <div className="panel-head">
-                  <h2>评审配置</h2>
+                  <h2>确认评审</h2>
                   <span className="hint">输入、评审要求和输出格式统一来自评审模块</span>
                 </div>
                 <div className="panel-body">
@@ -1025,6 +1027,8 @@ export default function App() {
                       </select>
                     </div>
                   </div>
+                  <details className="runtime-options">
+                    <summary>高级运行设置（通常无需修改）</summary>
                   <div className="field-row">
                     <div className="field">
                       <label>并发数</label>
@@ -1045,6 +1049,7 @@ export default function App() {
                       <input type="number" value={appConfig.chunk_size} onChange={(e) => updateConfig({ chunk_size: Number(e.target.value) || 8000 })} />
                     </div>
                   </div>
+                  </details>
                   <p className="muted" style={{ fontSize: 12 }}>
                     {appConfig.granularity === "single"
                       ? "将同一模块内的所选文件合并评审，核对文件间的一致性。"
@@ -1172,7 +1177,7 @@ export default function App() {
                           {progressList.map((p) => (
                             <div key={p.index} style={{ marginBottom: 10 }}>
                               <div className="muted" style={{ fontSize: 12 }}>
-                                {p.file} · {p.phase}
+                                {p.file} · {({ parse: "解析资料", waiting: "等待模型", analyze: "生成评审", chunk: "分块评审", merge: "合并结果", done: "已完成" } as Record<string, string>)[p.phase] ?? "评审中"}
                               </div>
                               <div className="stream-box">{p.text || "…"}</div>
                             </div>
@@ -1394,7 +1399,7 @@ export default function App() {
 
         {view === "settings" && appConfig && (
           <section className="view">
-            <div className="two-col">
+            <div className="two-col settings-layout">
               <div className="panel">
                 <div className="panel-head">
                   <h2>模型与连接</h2>
@@ -1402,50 +1407,50 @@ export default function App() {
                 </div>
                 <div className="panel-body">
                   <div className="field">
-                    <label>Base URL</label>
-                    <input value={appConfig.base_url} placeholder="http://llm-gateway.intra.corp/v1" onChange={(e) => updateConfig({ base_url: e.target.value })} />
+                    <label htmlFor="setting-1">Base URL</label>
+                    <input id="setting-1" value={appConfig.base_url} placeholder="http://llm-gateway.intra.corp/v1" onChange={(e) => updateConfig({ base_url: e.target.value })} />
                   </div>
                   <div className="field-row">
                     <div className="field">
-                      <label>模型标识</label>
-                      <input value={appConfig.model} placeholder="例如 deepseek-v4-flash" onChange={(e) => updateConfig({ model: e.target.value })} />
+                      <label htmlFor="setting-2">模型标识</label>
+                      <input id="setting-2" value={appConfig.model} placeholder="例如 deepseek-v4-flash" onChange={(e) => updateConfig({ model: e.target.value })} />
                     </div>
                     <div className="field">
-                      <label>并发数</label>
-                      <input type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
+                      <label htmlFor="setting-3">并发数</label>
+                      <input id="setting-3" type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
                     </div>
                   </div>
                   <div className="field">
-                    <label>API Key（{hasKey ? "已保存，留空则不修改" : "未配置"}）</label>
-                    <input type="password" value={apiKey} placeholder={hasKey ? "••••••••" : "sk-…"} onChange={(e) => setApiKey(e.target.value)} />
+                    <label htmlFor="setting-4">API Key（{hasKey ? "已保存，留空则不修改" : "未配置"}）</label>
+                    <input id="setting-4" type="password" value={apiKey} placeholder={hasKey ? "••••••••" : "sk-…"} onChange={(e) => { setApiKey(e.target.value); setConnectionResult(null); }} />
                   </div>
                   <div className="field-row">
                     <div className="field">
-                      <label>读取超时（秒）</label>
-                      <input type="number" value={appConfig.timeout_secs} onChange={(e) => updateConfig({ timeout_secs: Number(e.target.value) || 180 })} />
+                      <label htmlFor="setting-5">读取超时（秒）</label>
+                      <input id="setting-5" type="number" value={appConfig.timeout_secs} onChange={(e) => updateConfig({ timeout_secs: Number(e.target.value) || 180 })} />
                     </div>
                     <div className="field">
-                      <label>单文件上限（MB）</label>
-                      <input type="number" value={appConfig.max_file_mb} onChange={(e) => updateConfig({ max_file_mb: Number(e.target.value) || 1228 })} />
+                      <label htmlFor="setting-6">单文件上限（MB）</label>
+                      <input id="setting-6" type="number" value={appConfig.max_file_mb} onChange={(e) => updateConfig({ max_file_mb: Number(e.target.value) || 1228 })} />
                     </div>
                   </div>
                   <div className="field-row">
                     <div className="field">
-                      <label>最大文件数</label>
-                      <input type="number" value={appConfig.max_files} onChange={(e) => updateConfig({ max_files: Number(e.target.value) || 800 })} />
+                      <label htmlFor="setting-7">最大文件数</label>
+                      <input id="setting-7" type="number" value={appConfig.max_files} onChange={(e) => updateConfig({ max_files: Number(e.target.value) || 800 })} />
                     </div>
                     <div className="field">
-                      <label>历史保留（天，0=永久）</label>
-                      <input type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
+                      <label htmlFor="setting-8">历史保留（天，0=永久）</label>
+                      <input id="setting-8" type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
                     </div>
                   </div>
                   <div className="field">
-                    <label>API Key 请求头（留空为 Bearer）</label>
-                    <input value={appConfig.api_key_header} placeholder="留空，或 api-key / X-API-Key" onChange={(e) => updateConfig({ api_key_header: e.target.value })} />
+                    <label htmlFor="setting-9">API Key 请求头（留空为 Bearer）</label>
+                    <input id="setting-9" value={appConfig.api_key_header} placeholder="留空，或 api-key / X-API-Key" onChange={(e) => updateConfig({ api_key_header: e.target.value })} />
                   </div>
                   <div className="field">
-                    <label>代理地址（留空直连内网）</label>
-                    <input value={appConfig.proxy_url} placeholder="可选：http://proxy.intra:8080" onChange={(e) => updateConfig({ proxy_url: e.target.value })} />
+                    <label htmlFor="setting-10">代理地址（留空直连内网）</label>
+                    <input id="setting-10" value={appConfig.proxy_url} placeholder="可选：http://proxy.intra:8080" onChange={(e) => updateConfig({ proxy_url: e.target.value })} />
                   </div>
                   <label className="checkline">
                     <input type="checkbox" checked={appConfig.stream_enabled} onChange={(e) => updateConfig({ stream_enabled: e.target.checked })} /> 使用流式响应（网关不支持时关闭）
@@ -1459,11 +1464,12 @@ export default function App() {
                       disabled={connectionTesting}
                       onClick={async () => {
                         setConnectionTesting(true);
+                        setConnectionResult(null);
                         try {
                           const reply = await api.testConnection(gatewayCfg(), apiKey || undefined);
-                          toast(`连接正常：${reply}`);
+                          setConnectionResult({ ok: true, message: `连接正常：${reply}` });
                         } catch (e) {
-                          toast(String(e));
+                          setConnectionResult({ ok: false, message: String(e) });
                         } finally { setConnectionTesting(false); }
                       }}
                     >
@@ -1473,6 +1479,7 @@ export default function App() {
                       保存设置
                     </button>
                   </div>
+                  {connectionResult && <div className={`connection-result ${connectionResult.ok ? "success" : "error"}`} role={connectionResult.ok ? "status" : "alert"}>{connectionResult.message}</div>}
                   <p className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
                     API Key 通过系统凭据库加密保存（Windows 凭据管理器 / macOS Keychain），不进入配置、历史或导出。
                   </p>
@@ -1498,7 +1505,7 @@ export default function App() {
             </div>
             <div className="modal-body">
               <p className="muted" style={{ marginTop: 0 }}>
-                即将把所选文件内容发送至下列内网网关进行评审，请确认。
+                即将把所选文件内容发送至下列模型服务进行评审，请确认。
               </p>
               <table className="data">
                 <tbody>

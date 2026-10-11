@@ -80,6 +80,13 @@ async function stop() {
 async function openModule() {
   await page.getByRole('button', { name: /评审模块/ }).first().click();
   await page.getByRole('button', { name: new RegExp(`${moduleName}.*条启用的匹配条件`) }).click();
+  await expandModuleAdvanced();
+}
+async function expandModuleAdvanced() {
+  for (const label of ['输入说明', '输出补充要求']) {
+    const details = page.locator('details.module-advanced').filter({ has: page.getByLabel(label, { exact: true }) });
+    if (await details.getAttribute('open') === null) await details.locator('summary').click();
+  }
 }
 async function saveModule() {
   await page.getByRole('button', { name: '保存模块配置', exact: true }).click();
@@ -111,6 +118,12 @@ try {
   await page.getByText('连接正常：可用', { exact: true }).waitFor();
   await page.getByRole('button', { name: /评审模块/ }).first().click();
   await page.getByRole('button', { name: '新建模块', exact: true }).click();
+  for (const heading of ['1 文件匹配', '2 评审要求', '3 输出结果']) {
+    await page.getByRole('heading', { name: heading, exact: true }).waitFor();
+  }
+  assert.equal(await page.getByLabel('输入说明', { exact: true }).isVisible(), false, 'Optional input instructions should start collapsed');
+  assert.equal(await page.getByLabel('输出补充要求', { exact: true }).isVisible(), false, 'Optional output instructions should start collapsed');
+  await expandModuleAdvanced();
   await page.getByLabel('模块名称', { exact: true }).fill(moduleName);
   await page.getByRole('button', { name: '添加匹配条件', exact: true }).click();
   await page.getByLabel('匹配方式 1', { exact: true }).selectOption('keyword');

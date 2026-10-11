@@ -68,7 +68,7 @@ export default function ReviewModules({ config, defaults, activeRuleSetId, onRul
     json: "固定字段：verdict、basis、risks、remediations、citations。程序据此解析和导出。",
   };
   return <section className="view">
-    <div className="module-intro"><div><strong>一个模块，一套评审规范</strong><p>先匹配文件，再把解析内容与模块规范交给模型；结果按模块归组。</p></div>
+    <div className="module-intro"><div><strong>按模块配置评审</strong><p>依次设置文件匹配、评审要求和输出结果，保存后即可使用。</p></div>
       <span className="tag">{dirty ? "有未保存的配置" : "配置已保存"}</span></div>
     {disabled && <p role="status">扫描或评审运行中，完成后可修改模块。</p>}
     <fieldset className="module-fieldset" disabled={disabled || saving}>
@@ -92,7 +92,7 @@ export default function ReviewModules({ config, defaults, activeRuleSetId, onRul
             {selected && template ? <>
               <div className="field-row"><div className="field"><label htmlFor="module-name">模块名称</label><input id="module-name" value={selected.name} onChange={(e) => change({ systems: config.systems.map((m) => m.id === selected.id ? { ...m, name: e.target.value } : m) })} /></div>
                 <div className="field module-color"><label htmlFor="module-color">标识颜色</label><input id="module-color" type="color" value={selected.color} onChange={(e) => change({ systems: config.systems.map((m) => m.id === selected.id ? { ...m, color: e.target.value } : m) })} /></div></div>
-              <section className="module-section"><div className="inline"><h3>文件匹配</h3><span className="spacer" /><button className="btn btn-sm" onClick={addRule}>添加匹配条件</button></div>
+              <section className="module-section"><div className="inline"><h3><span className="module-step">1</span> 文件匹配</h3><span className="spacer" /><button className="btn btn-sm" onClick={addRule}>添加匹配条件</button></div>
                 <p className="muted">任一条件命中就归入本模块。不区分大小写，关键字只匹配文件名；例如“阿波罗”可匹配阿波罗.txt、阿波罗1.docx。</p>
                 {moduleRules.map((r, index) => <div className="module-rule" key={r.id}>
                   <input type="checkbox" aria-label={`启用匹配 ${index + 1}`} checked={r.enabled} onChange={(e) => editRule(r.id, { enabled: e.target.checked })} />
@@ -104,12 +104,18 @@ export default function ReviewModules({ config, defaults, activeRuleSetId, onRul
                 {moduleRules.length === 0 && <p className="muted">尚未配置匹配条件，仅可用于粘贴文本。添加条件后即可自动识别文件。</p>}
                 <small>匹配不代表能够解析。支持 TXT、JSON、Excel、DOC / DOCX，PDF 暂不支持。</small>
               </section>
-              <section className="module-section"><h3>评审规范</h3><p className="muted">下面的输入说明、评审要求与输出要求共同组成 Prompt，文件正文由程序填入。</p>
-                <div className="field"><label htmlFor="module-input">输入说明</label><textarea id="module-input" value={template.input_instructions} placeholder="说明输入是什么资料，以及如何理解表格、字段和缺失内容。" onChange={(e) => editTemplate({ input_instructions: e.target.value })} /></div>
+              <section className="module-section"><h3><span className="module-step">2</span> 评审要求</h3><p className="muted">写清楚要检查什么、什么情况通过或阻断。文件正文会自动带入。</p>
                 <div className="field"><label htmlFor="module-review">评审要求</label><textarea id="module-review" className="review-prompt" value={template.content} onChange={(e) => editTemplate({ content: e.target.value })} /></div>
+                <details className="module-advanced" key={`${selected.id}-input`}><summary>输入说明（可选）</summary>
+                  <div className="field"><label htmlFor="module-input">输入说明</label><textarea id="module-input" value={template.input_instructions} placeholder="说明输入是什么资料，以及如何理解表格、字段和缺失内容。" onChange={(e) => editTemplate({ input_instructions: e.target.value })} /></div>
+                </details>
+              </section>
+              <section className="module-section"><h3><span className="module-step">3</span> 输出结果</h3>
                 <div className="field"><label htmlFor="module-format">输出格式</label><select id="module-format" value={template.output_format} onChange={(e) => editTemplate({ output_format: e.target.value as OutputFormat })}>
                   <option value="standard">标准结论</option><option value="checklist">检查表</option><option value="brief">简洁摘要</option><option value="json">JSON</option></select><small>{formatHelp[template.output_format]}</small></div>
-                <div className="field"><label htmlFor="module-output">输出补充要求</label><textarea id="module-output" value={template.output_instructions} placeholder="补充报告措辞、引用粒度和整改建议要求，遵循上方输出结构。" onChange={(e) => editTemplate({ output_instructions: e.target.value })} /></div>
+                <details className="module-advanced" key={`${selected.id}-output`}><summary>输出补充要求（可选）</summary>
+                  <div className="field"><label htmlFor="module-output">输出补充要求</label><textarea id="module-output" value={template.output_instructions} placeholder="补充报告措辞、引用粒度和整改建议要求，遵循上方输出结构。" onChange={(e) => editTemplate({ output_instructions: e.target.value })} /></div>
+                </details>
                 {defaults?.templates.some((t) => t.id === template.id) && <button className="btn btn-sm" onClick={() => { const original = defaults.templates.find((t) => t.id === template.id)!; editTemplate({ content: original.content, input_instructions: original.input_instructions, output_instructions: original.output_instructions, output_format: original.output_format }); }}>恢复内置规范</button>}
               </section>
             </> : <div className="empty">选择或新建一个模块。</div>}

@@ -36,7 +36,7 @@ pub fn default_templates() -> Vec<Template> {
         Template {
             id: "tpl-xxl".into(),
             name: "XXL-JOB 配置评审".into(),
-            content: "评审 XXL-JOB 配置。核对执行器、JobHandler、调度表达式、运行参数、路由与阻塞策略、超时、失败重试、幂等、告警、启停时间、容量和回滚方案；资料未展示的项目标为待确认，不得自行假定。".into(),
+            content: "评审 XXL-JOB 配置。Cron 采用 6 个必填字段（秒、分、时、日、月、星期）及可选年份，必须逐位解释频率，不能按五位 Unix Cron 解读；给出修正表达式时再次逐位核对。单机串行不等于跨节点互斥，分片广播需业务实现分片与幂等。核对执行器、JobHandler、调度表达式、运行参数、路由与阻塞策略、超时、失败重试、幂等、告警、启停时间、容量和回滚方案；资料未展示的项目标为待确认，不得自行假定。".into(),
             input_instructions: String::new(),
             output_instructions: String::new(),
             output_format: "standard".into(),

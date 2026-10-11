@@ -126,6 +126,9 @@ pub struct FileResult {
 /// 网关配置（API Key 仅内存/DPAPI，不进入历史与导出）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
+    /// 仅运行时会话标识，不接受 IPC 输入，也不写入配置或历史。
+    #[serde(skip)]
+    pub session_id: String,
     pub base_url: String,
     pub model: String,
     #[serde(default)]

@@ -235,9 +235,15 @@ progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-colo
 .module-color { max-width: 110px; }
 .module-section { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
 .module-section h3 { margin: 0 0 8px; font-size: 15px; }
+.module-step { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-right: 5px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-size: 12px; }
 .module-section p { line-height: 1.7; }
 .module-section textarea { min-height: 92px; }
 .module-section textarea.review-prompt { min-height: 170px; }
+.module-advanced { margin: 12px 0; }
+.module-advanced summary { padding: 8px 0; color: var(--muted); cursor: pointer; font-size: 12px; }
+.module-advanced summary:hover { color: var(--ink); }
+.module-advanced summary:focus-visible { outline: 2px solid var(--ok); outline-offset: 3px; }
+.module-advanced[open] summary { margin-bottom: 6px; }
 .module-rule { display: grid; grid-template-columns: 18px 140px minmax(100px, 1fr) 42px; align-items: center; gap: 8px; margin: 10px 0; }
 .module-success { color: var(--ok); }
 .module-priority { margin-top: 18px; }
@@ -249,3 +255,12 @@ progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-colo
 .module-rule select, .module-rule input:not([type="checkbox"]) { min-width: 0; width: 100%; border: 1px solid #d8cfbd; padding: 8px; background: var(--surface); color: inherit; font: inherit; border-radius: 2px; }
 .module-color input { height: 40px; padding: 4px; }
 .module-editor .panel-head { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+
+.settings-layout { grid-template-columns: minmax(420px, 2fr) minmax(230px, 1fr); }
+.connection-result { margin-top: 14px; padding: 12px; border: 1px solid currentColor; white-space: pre-wrap; overflow-wrap: anywhere; }
+.connection-result.success { color: var(--ok); background: var(--ok-soft); }
+.connection-result.error { color: var(--danger); background: var(--danger-soft); }
+@media (max-width: 1100px) { .settings-layout { grid-template-columns: 1fr; } }
+
+.runtime-options { margin: 8px 0 16px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.runtime-options > summary { cursor: pointer; color: var(--muted); padding: 5px 0 14px; }

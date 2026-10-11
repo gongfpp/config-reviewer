@@ -11,6 +11,7 @@ use zip::write::SimpleFileOptions;
 
 fn cfg(url: String) -> model::GatewayConfig {
     model::GatewayConfig {
+        session_id: String::new(),
         base_url: url,
         model: "mock-model".into(),
         api_key: "mock-key".into(),
@@ -371,7 +372,7 @@ fn standard_sections_and_verdict_are_parsed() {
     assert_eq!(r.verdict, "有条件通过");
     assert_eq!(r.basis, vec!["配置完整"]);
     assert_eq!(r.risks, vec!["缺回滚"]);
-    assert_eq!(r.remediations, vec!["补回滚"]);
+    assert_eq!(r.remediations, vec!["补回滚", "引用：$.key | value"]);
     assert_eq!(r.citations.len(), 1);
     assert_eq!(
         results::detect_verdict("未通过\n后续通过测试"),
@@ -1085,4 +1086,63 @@ fn migration_is_saved_once_and_subsequent_edits_remain_stable() {
     migrated.templates.retain(|t| t.id != "tpl-apollo");
     config::save(&path, &migrated).unwrap();
     assert!(!config::load(&path).systems.iter().any(|m| m.id == "apollo"));
+}
+
+#[tokio::test]
+async fn http_errors_include_safe_provider_details_and_own_user_agent() {
+    for streaming in [false, true] {
+        let body = serde_json::to_vec(&serde_json::json!({"error":{"type":"MissingSessionID","message":"missing conversation header; key=mock-key"}})).unwrap();
+        let (url, rx) = mock(vec![body], "application/json", 400, 0);
+        let config = cfg(url);
+        let error = if streaming {
+            gateway::chat_stream(&config, "test", None, |_| {})
+                .await
+                .unwrap_err()
+        } else {
+            gateway::chat(&config, "test").await.unwrap_err()
+        };
+        assert!(error.contains("HTTP 400"));
+        assert!(error.contains("MissingSessionID"));
+        assert!(error.contains("missing conversation header"));
+        assert!(!error.contains("mock-key"));
+        let received = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(received.to_lowercase().contains(&format!(
+            "user-agent: config-reviewer/{}",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(!received.to_lowercase().contains("x-opencode-session"));
+    }
+}
+
+#[test]
+fn citation_only_basis_is_valid_standard_review_and_keeps_business_ids() {
+    let raw = "阻断\n【依据】\n- 引用：Sheet!7 | 9003 调度器缺少回滚方案\n【风险】\n9003 任务可能重复执行\n9003.5 参数缺少说明\n【整改项】\n1. 为任务 9003 补齐回滚方案\n2、 明确重试次数";
+    let result = results::parse_result("任务表.xlsx", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(result.verdict, "阻断");
+    assert_eq!(
+        result.basis,
+        vec!["引用：Sheet!7 | 9003 调度器缺少回滚方案"]
+    );
+    assert_eq!(
+        result.risks,
+        vec!["9003 任务可能重复执行", "9003.5 参数缺少说明"]
+    );
+    assert_eq!(
+        result.remediations,
+        vec!["为任务 9003 补齐回滚方案", "明确重试次数"]
+    );
+    assert_eq!(result.citations.len(), 1);
+    assert_eq!(result.citations[0].locator, "Sheet!7");
+    assert_eq!(result.citations[0].snippet, "9003 调度器缺少回滚方案");
+}
+
+#[test]
+fn numbered_citations_remain_available_as_basis_and_structured_citations() {
+    let raw = "有条件通过\n【依据】\n1. 引用：第 3 行 | 1234 参数已配置\n【风险】\n1) 缺少确认记录\n【整改项】\n1. 补充确认记录";
+    let result = results::parse_result("配置.txt", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.basis, vec!["引用：第 3 行 | 1234 参数已配置"]);
+    assert_eq!(result.citations.len(), 1);
+    assert_eq!(result.citations[0].snippet, "1234 参数已配置");
 }

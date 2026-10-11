@@ -23,7 +23,7 @@ fn format_spec(output_format: &str) -> &'static str {
             "请只输出一个 JSON 对象，不要包裹 Markdown 代码块、不要输出多余文字。字段结构：{\"verdict\":\"通过|有条件通过|阻断\",\"basis\":[\"\"],\"risks\":[\"\"],\"remediations\":[\"\"],\"citations\":[{\"locator\":\"\",\"snippet\":\"\"}]}。\n"
         }
         _ => {
-            "标准结论必须以“通过”“有条件通过”或“阻断”之一开头，并分别给出【依据】【风险】【整改项】。\n"
+            "标准结论必须以“通过”“有条件通过”或“阻断”之一开头。整份文件只给一个总评结论和一组【依据】【风险】【整改项】，不得按任务重复这些标题。存在多个任务或配置对象时，在各条依据、风险和整改项中注明对应任务 ID 或对象标识。\n"
         }
     }
 }
@@ -266,12 +266,8 @@ fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
                 break;
             }
         }
-        let item = item
-            .trim()
-            .trim_start_matches(['-', '*', '•', ' '])
-            .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '、')
-            .trim();
-        if item.is_empty() || item.starts_with("引用") {
+        let item = strip_numbered_list_prefix(item.trim().trim_start_matches(['-', '*', '•', ' ']));
+        if item.is_empty() {
             continue;
         }
         match section {
@@ -284,11 +280,29 @@ fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     (basis, risks, fixes)
 }
 
+/// 只移除数字 + 列表标点 + 空白；裸数字开头的任务 ID 和参数值必须保留。
+fn strip_numbered_list_prefix(text: &str) -> &str {
+    let digit_end = text.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_end == 0 {
+        return text.trim();
+    }
+    let suffix = &text[digit_end..];
+    for marker in [".", ")", "、"] {
+        if let Some(rest) = suffix.strip_prefix(marker) {
+            if rest.starts_with(char::is_whitespace) {
+                return rest.trim();
+            }
+        }
+    }
+    text.trim()
+}
+
 /// 解析「引用：定位 | 片段」形式的结构化引用。
 fn extract_citations(file: &str, raw: &str) -> Vec<Citation> {
     let mut citations = Vec::new();
     for line in raw.lines() {
-        let trimmed = line.trim().trim_start_matches(['>', '-', '*', ' ']);
+        let trimmed =
+            strip_numbered_list_prefix(line.trim().trim_start_matches(['>', '-', '*', ' ']));
         let Some(rest) = trimmed.strip_prefix("引用") else {
             continue;
         };

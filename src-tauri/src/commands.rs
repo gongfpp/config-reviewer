@@ -453,6 +453,7 @@ async fn run_review_inner(
     cancel: &Arc<AtomicBool>,
 ) -> Result<ReviewSummary, String> {
     let mut cfg = request.cfg.clone();
+    cfg.session_id = task_id.to_string();
     cfg.api_key = secrets::load_api_key();
     if cfg.api_key.trim().is_empty() {
         return Err("未配置 API Key，请在「设置」中填写。".into());
@@ -946,21 +947,24 @@ async fn call_with_retry(
         if cancel.load(Ordering::Relaxed) {
             return Err("任务已取消".into());
         }
-        if attempt > 0 {
-            emit(
-                app,
-                task_id,
-                index,
-                total,
-                file,
-                phase,
-                Some("\n[已重试]\n"),
-                None,
-            );
-        }
         let permit = gateway::cancellable(sem.clone().acquire_owned(), Some(&cancel))
             .await?
             .map_err(|_| "并发控制不可用".to_string())?;
+        let waiting = if attempt == 0 {
+            "\n正在等待模型响应…\n".to_string()
+        } else {
+            format!("\n第 {attempt}/{retry_count} 次重试，正在等待模型响应…\n")
+        };
+        emit(
+            app,
+            task_id,
+            index,
+            total,
+            file,
+            "waiting",
+            Some(&waiting),
+            None,
+        );
         let result = if stream {
             stream_into(
                 app,
