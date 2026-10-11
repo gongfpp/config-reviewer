@@ -34,12 +34,14 @@ try {
   $setup = Get-ChildItem "$webviewRoot/*/Installer/setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($setup) {
     $p = Start-Process $setup.FullName -ArgumentList @('--uninstall','--msedgewebview','--system-level','--force-uninstall','--verbose-logging') -Wait -PassThru
-    if ($p.ExitCode -ne 0) { throw "WebView2 uninstall failed: $($p.ExitCode)" }
+    # Chromium setup uses 19 for UNINSTALL_SUCCESSFUL; registry absence is checked below.
+    if ($p.ExitCode -notin @(0,19)) { throw "WebView2 uninstall failed: $($p.ExitCode)" }
   }
   $client = 'HKLM:/SOFTWARE/WOW6432Node/Microsoft/EdgeUpdate/Clients/{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
   $existing = Get-ItemProperty $client -ErrorAction SilentlyContinue
   if ($existing -and $existing.pv -and $existing.pv -ne '0.0.0.0') { throw 'WebView2 still installed.' }
   $before.webview2_absent_before_install = $true
+  $before.sdk19041_preinstalled = Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Include/10.0.19041.0')
   # Block external traffic for every process, including installer service children.
   # Loopback is excluded by the Windows firewall, so the local mock LLM stays usable.
   New-NetFirewallRule -Name ReviewerOfflineAcceptance -DisplayName ReviewerOfflineAcceptance -Direction Outbound -Action Block -RemoteAddress @('0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/0') -Profile Any | Out-Null
@@ -57,6 +59,9 @@ try {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-offline-environment.ps1 -InstallPath 'C:\ReviewerBuildTools'
   if ($LASTEXITCODE -ne 0) { throw "Offline environment installation failed: $LASTEXITCODE" }
   . "$PSScriptRoot/enter-dev-environment.ps1"
+  & tools/editor/bin/code.cmd --version
+  if ($LASTEXITCODE -ne 0) { throw 'Packaged offline editor cannot start its CLI.' }
+  $env:REVIEWER_RUNTIME_PATH = "$env:WINDIR\System32;$env:WINDIR"
   if ((Get-Command node.exe).Source -ne (Join-Path $root 'tools/node/node.exe')) { throw 'Node was not selected from the kit.' }
   if ((Get-Command rustc.exe).Source -ne (Join-Path $root 'tools/rust/bin/rustc.exe')) { throw 'Rust was not selected from the kit.' }
   if (Test-Path src-tauri/target) { throw 'Acceptance requires a clean target directory.' }

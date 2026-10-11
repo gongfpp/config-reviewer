@@ -12,13 +12,18 @@ foreach ($required in @((Join-Path $node 'node.exe'),(Join-Path $rust 'cargo.exe
 }
 $bootstrap = Join-Path ([IO.Path]::GetTempPath()) ('reviewer-env-' + [Guid]::NewGuid().ToString('N') + '.cmd')
 try {
-  # The path can contain Chinese characters. Use the current cmd code page, not ASCII.
-  $codePage = [Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage
-  $encoding = [Text.Encoding]::GetEncoding($codePage)
-  [IO.File]::WriteAllLines($bootstrap,@('@echo off',('call "{0}" -no_logo -arch=x64 -host_arch=x64 -winsdk=10.0.19041.0 >nul' -f $devcmd),'if errorlevel 1 exit /b %errorlevel%','set'),$encoding)
-  $environment = & cmd.exe /d /c call $bootstrap
+  # Carry Unicode paths through the environment rather than an OEM-encoded batch file.
+  $env:REVIEWER_VS_DEVCMD = $devcmd
+  $originalOutputEncoding = [Console]::OutputEncoding
+  [Console]::OutputEncoding = [Text.Encoding]::Unicode
+  [IO.File]::WriteAllLines($bootstrap,@('@echo off','call "%REVIEWER_VS_DEVCMD%" -no_logo -arch=x64 -host_arch=x64 -winsdk=10.0.19041.0 >nul','if errorlevel 1 exit /b %errorlevel%','set'),[Text.Encoding]::ASCII)
+  $environment = & cmd.exe /u /d /c call $bootstrap
   if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize the packaged C++ toolchain.' }
-} finally { if (Test-Path $bootstrap) { [IO.File]::Delete($bootstrap) } }
+} finally {
+  if ($originalOutputEncoding) { [Console]::OutputEncoding = $originalOutputEncoding }
+  Remove-Item Env:/REVIEWER_VS_DEVCMD -ErrorAction SilentlyContinue
+  if (Test-Path $bootstrap) { [IO.File]::Delete($bootstrap) }
+}
 foreach ($line in $environment) {
   if ($line -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1],$matches[2],'Process') }
 }

@@ -23,6 +23,11 @@ folder = root/'artifacts/full-dev-kit'
 folder.mkdir(parents=True,exist_ok=True)
 output = folder/f'ConfigReviewer-{version}-windows-x64-full-development-kit.zip'
 evidence = json.loads((args.evidence/'result.json').read_text(encoding='utf-8-sig'))
+validated_commit = evidence['source_commit']
+changed = subprocess.check_output(['git','diff','--name-only',validated_commit,'HEAD'],cwd=root,text=True).splitlines()
+allowed = {'.gitignore','README.md','scripts/package-full-development-kit.py','scripts/package-source.py'}
+if any(name not in allowed and not name.startswith('docs/') for name in changed):
+    raise SystemExit('Runtime or development entrypoints changed after the acceptance run; retest before packaging.')
 if not evidence['passed'] or not evidence['isolation']['all_external_outbound_blocked'] or evidence['source_modification_rebuilds'] != 2:
     raise SystemExit('Full offline environment acceptance did not pass.')
 hashes = {}

@@ -10,6 +10,8 @@ $count = 0
 foreach ($line in [IO.File]::ReadLines($file)) {
   if ($line -notmatch '^([a-f0-9]{64})  (.+)$') { throw 'Malformed checksum manifest.' }
   $expected, $name = $matches[1], $matches[2]
+  # Portable editor settings are deliberately user-editable after first use.
+  if ($ToolsOnly -and $name.StartsWith('tools/editor/data/')) { continue }
   $path = [IO.Path]::GetFullPath((Join-Path $root $name))
   if (-not $path.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Checksum path escapes the kit.' }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing kit file: $name" }

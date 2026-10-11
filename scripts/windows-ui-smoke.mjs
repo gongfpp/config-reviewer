@@ -31,7 +31,7 @@ const artifacts = path.resolve('artifacts/ui-smoke'); await mkdir(artifacts, { r
 let app, browser, page;
 const errors = [];
 async function launch() {
-  app = spawn(executable, [], { env: { ...process.env, APPDATA: path.join(root, 'appdata'),
+  app = spawn(executable, [], { env: { ...process.env, PATH: process.env.REVIEWER_RUNTIME_PATH || process.env.PATH, APPDATA: path.join(root, 'appdata'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222', WEBVIEW2_USER_DATA_FOLDER: path.join(root, 'webview') } });
   for (let i = 0; i < 60; i++) {
     try { browser = await chromium.connectOverCDP('http://127.0.0.1:9222'); break; }
