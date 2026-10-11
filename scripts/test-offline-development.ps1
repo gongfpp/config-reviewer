@@ -25,15 +25,18 @@ try {
   }
   $dnsServers = @(Get-DnsClientServerAddress | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ } | Select-Object -Unique)
   if ($dnsServers.Count) {
+    New-NetFirewallRule -Name ReviewerOfflineDnsTcp -DisplayName ReviewerOfflineDns -Direction Outbound -Action Allow -Protocol TCP -RemotePort 53 -RemoteAddress $dnsServers -Profile Any -Enabled False | Out-Null
     New-NetFirewallRule -Name ReviewerOfflineDns -DisplayName ReviewerOfflineDns -Direction Outbound -Action Allow -Protocol UDP -RemotePort 53 -RemoteAddress $dnsServers -Profile Any -Enabled False | Out-Null
   }
+  # Azure host-only WireServer keeps the disposable VM healthy; it is not an Internet download endpoint.
+  New-NetFirewallRule -Name ReviewerOfflineAzureFabric -DisplayName ReviewerOfflineAzureFabric -Direction Outbound -Action Allow -Protocol TCP -RemotePort 80,32526 -RemoteAddress '168.63.129.16' -Profile Any -Enabled False | Out-Null
   function Enable-OfflineIsolation {
     foreach ($name in $originalAllowRules) { Disable-NetFirewallRule -Name $name | Out-Null }
-    Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Enable-NetFirewallRule | Out-Null
+    Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns*','ReviewerOfflineAzureFabric' -ErrorAction SilentlyContinue | Enable-NetFirewallRule | Out-Null
     Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
   }
   function Restore-Network {
-    Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Disable-NetFirewallRule | Out-Null
+    Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns*','ReviewerOfflineAzureFabric' -ErrorAction SilentlyContinue | Disable-NetFirewallRule | Out-Null
     foreach ($profile in $profiles) { Set-NetFirewallProfile -Profile $profile.Name -Enabled $profile.Enabled -DefaultOutboundAction $profile.DefaultOutboundAction }
     foreach ($name in $originalAllowRules) { Enable-NetFirewallRule -Name $name | Out-Null }
   }
@@ -96,7 +99,7 @@ try {
   Enable-OfflineIsolation
   Assert-NetworkIsolation
   $before.development_tool_outbound_blocked = $true
-  $before.network_exceptions = @{ ci_agent=$agentPaths; dns=$dnsServers; loopback=$true }
+  $before.network_exceptions = @{ ci_agent=$agentPaths; dns=$dnsServers; dns_protocols=@('UDP','TCP'); loopback=$true; azure_fabric=@{ ip='168.63.129.16'; tcp_ports=@(80,32526) } }
   Write-Output 'External traffic blocked; loopback connectivity verified. Installing the supplied offline environment.'
   $before | ConvertTo-Json | Set-Content artifacts/dev-kit-test/isolation.json -Encoding UTF8
   # Windows PowerShell 5.1 parses and runs the user entrypoints, not pwsh 7.
@@ -145,7 +148,7 @@ try {
   @{ passed=$true; source_commit=(Get-Content .build-source.json -Raw | ConvertFrom-Json).source_commit; os=$before.os; isolation=$before; source_modification_rebuilds=2; relocated_original_exe_tested=$true; rust_tests=59; ui_test=(Get-Content artifacts/ui-smoke/result.json -Raw | ConvertFrom-Json); windows10_target_tested=$false; dotnet_and_vc_runtime='Preinstalled OS prerequisites; bundled installers are signature-verified but absent-state installation not exercised.' } | ConvertTo-Json -Depth 8 | Set-Content artifacts/dev-kit-test/result.json -Encoding UTF8
 } finally {
   Restore-Network
-  Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns*','ReviewerOfflineAzureFabric' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
   Get-ChildItem "$env:TEMP/dd_*" -ErrorAction SilentlyContinue | Copy-Item -Destination artifacts/dev-kit-test -ErrorAction SilentlyContinue
   Stop-Transcript
 }
