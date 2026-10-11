@@ -1,4 +1,4 @@
-# Only for disposable hosted CI. Never removes software on a user's computer.
+﻿# Only for disposable hosted CI. Never removes software on a user's computer.
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
@@ -87,7 +87,7 @@ try {
   Remove-Item Env:/REVIEWER_EXPECT_SOURCE_EDIT
   & node.exe scripts/windows-ui-smoke.mjs ready-to-run/config-reviewer.exe
   if ($LASTEXITCODE -ne 0) { throw 'Relocated original standalone EXE cannot run.' }
-  @{ passed=$true; os=$before.os; isolation=$before; source_modification_rebuilds=2; relocated_original_exe_tested=$true; rust_tests=34; ui_test=(Get-Content artifacts/ui-smoke/result.json -Raw | ConvertFrom-Json); windows10_target_tested=$false; dotnet_and_vc_runtime='Preinstalled OS prerequisites; bundled installers are signature-verified but absent-state installation not exercised.' } | ConvertTo-Json -Depth 8 | Set-Content artifacts/dev-kit-test/result.json -Encoding UTF8
+  @{ passed=$true; source_commit=(Get-Content .build-source.json -Raw | ConvertFrom-Json).source_commit; os=$before.os; isolation=$before; source_modification_rebuilds=2; relocated_original_exe_tested=$true; rust_tests=34; ui_test=(Get-Content artifacts/ui-smoke/result.json -Raw | ConvertFrom-Json); windows10_target_tested=$false; dotnet_and_vc_runtime='Preinstalled OS prerequisites; bundled installers are signature-verified but absent-state installation not exercised.' } | ConvertTo-Json -Depth 8 | Set-Content artifacts/dev-kit-test/result.json -Encoding UTF8
 } finally {
   Remove-NetFirewallRule -Name ReviewerOfflineAcceptance -ErrorAction SilentlyContinue
   foreach ($profile in $profiles) { Set-NetFirewallProfile -Profile $profile.Name -Enabled $profile.Enabled -DefaultOutboundAction $profile.DefaultOutboundAction }

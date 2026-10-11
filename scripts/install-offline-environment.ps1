@@ -1,4 +1,4 @@
-# Windows PowerShell 5.1. The kit includes every installer; no downloads occur here.
+﻿# Windows PowerShell 5.1. The kit includes every installer; no downloads occur here.
 [CmdletBinding()]
 param([string]$InstallPath = (Join-Path $env:ProgramFiles 'ConfigReviewerBuildTools'))
 $ErrorActionPreference = 'Stop'

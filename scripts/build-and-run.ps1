@@ -1,4 +1,4 @@
-# Windows PowerShell 5.1 / PowerShell 7；只构建应用，不生成安装包。
+﻿# Windows PowerShell 5.1 / PowerShell 7；只构建应用，不生成安装包。
 [CmdletBinding()]
 param([switch]$Release, [switch]$Run, [switch]$Test, [switch]$Online)
 $ErrorActionPreference = 'Stop'

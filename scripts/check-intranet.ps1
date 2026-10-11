@@ -1,4 +1,4 @@
-# Windows PowerShell 5.1；只检查本机环境和用户指定的内网地址。
+﻿# Windows PowerShell 5.1；只检查本机环境和用户指定的内网地址。
 [CmdletBinding()]
 param([string]$BaseUrl = '', [string]$Model = '', [string]$ApiKeyHeader = '', [switch]$TestModel)
 $ErrorActionPreference = 'Stop'

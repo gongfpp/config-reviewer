@@ -1,4 +1,4 @@
-# 在 Windows 构建成功后生成可导入内网的完整压缩包和哈希清单。
+﻿# 在 Windows 构建成功后生成可导入内网的完整压缩包和哈希清单。
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version

@@ -1,4 +1,4 @@
-# Verify a transferred kit before first installation; no Python or network needed.
+﻿# Verify a transferred kit before first installation; no Python or network needed.
 [CmdletBinding()]
 param([switch]$ToolsOnly)
 $ErrorActionPreference = 'Stop'

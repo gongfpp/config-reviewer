@@ -1,4 +1,4 @@
-# Dot-source this file. All changes are process-local; no global PATH/rustup changes.
+﻿# Dot-source this file. All changes are process-local; no global PATH/rustup changes.
 $ErrorActionPreference = 'Stop'
 $kitRoot = Split-Path -Parent $PSScriptRoot
 $statePath = Join-Path $kitRoot '.offline/environment.json'
