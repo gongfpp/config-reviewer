@@ -31,7 +31,7 @@ const artifacts = path.resolve('artifacts/ui-smoke'); await mkdir(artifacts, { r
 let app, browser, page;
 const errors = [];
 async function launch() {
-  app = spawn(executable, [], { env: { ...process.env, PATH: process.env.REVIEWER_RUNTIME_PATH || process.env.PATH, APPDATA: path.join(root, 'appdata'),
+  app = spawn(executable, ['--qa-data-dir', path.join(root, 'appdata')], { env: { ...process.env, PATH: process.env.REVIEWER_RUNTIME_PATH || process.env.PATH, APPDATA: path.join(root, 'appdata'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222', WEBVIEW2_USER_DATA_FOLDER: path.join(root, 'webview') } });
   for (let i = 0; i < 60; i++) {
     try { browser = await chromium.connectOverCDP('http://127.0.0.1:9222'); break; }
@@ -140,10 +140,11 @@ try {
   await page.getByRole('button', { name: /重试失败项/ }).click();
   await page.getByText('评审完成', { exact: true }).waitFor();
   assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 5);
-  await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount,
-    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history', 'GUI cancellation and retry'],
-    limitation: 'Save dialog response was stubbed; other Tauri IPC and file writes used the real installed application.' }, null, 2));
-  console.log('Windows installed application UI smoke passed');
+  await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount, executable,
+    sourceEditExpected: process.env.REVIEWER_EXPECT_SOURCE_EDIT || null, runtimePathIsolated: Boolean(process.env.REVIEWER_RUNTIME_PATH),
+    checked: ['real Windows EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history', 'GUI cancellation and retry'],
+    limitation: 'Save dialog response was stubbed; other Tauri IPC and file writes used the real Windows application.' }, null, 2));
+  console.log('Windows application UI smoke passed');
 } catch (error) {
   if (page) { await page.screenshot({ path: path.join(artifacts, 'failure.png') }).catch(() => {}); await writeFile(path.join(artifacts, 'failure.txt'), String(error)); }
   throw error;
