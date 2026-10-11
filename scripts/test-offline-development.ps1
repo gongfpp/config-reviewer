@@ -17,6 +17,28 @@ try {
   }
   # Validate the firewall command before spending time removing preinstalled VS.
   New-NetFirewallRule -Name ReviewerOfflineAcceptance -DisplayName ReviewerOfflineAcceptance -Direction Outbound -Action Block -RemoteAddress Any -Profile Any -Enabled False | Out-Null
+  function Assert-NetworkIsolation {
+    $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0)
+    $clientProbe = New-Object Net.Sockets.TcpClient
+    try {
+      $listener.Start()
+      $connection = $clientProbe.ConnectAsync('127.0.0.1',$listener.LocalEndpoint.Port)
+      if (-not $connection.Wait(3000) -or -not $clientProbe.Connected) { throw 'Loopback traffic was blocked; local test gateway cannot run.' }
+    } finally { $clientProbe.Dispose(); $listener.Stop() }
+    try {
+      Invoke-WebRequest 'https://www.microsoft.com' -UseBasicParsing -TimeoutSec 8 | Out-Null
+      throw 'External network probe unexpectedly succeeded.'
+    } catch {
+      if ($_.Exception.Message -match 'unexpectedly succeeded') { throw }
+      $before.external_probe_failed = $_.Exception.Message
+    }
+  }
+  Enable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
+  Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+  Assert-NetworkIsolation
+  Disable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
+  foreach ($profile in $profiles) { Set-NetFirewallProfile -Profile $profile.Name -Enabled $profile.Enabled -DefaultOutboundAction $profile.DefaultOutboundAction }
+  Write-Output 'Firewall isolation preflight passed.'
   Write-Output 'Removing preinstalled C++ compiler instances from this disposable runner.'
   # Remove the runner's compiler installation rather than accidentally validating it.
   $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer'
@@ -55,20 +77,7 @@ try {
   # Loopback is excluded by the Windows firewall, so the local mock LLM stays usable.
   Enable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
   Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
-  $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0)
-  $clientProbe = New-Object Net.Sockets.TcpClient
-  try {
-    $listener.Start()
-    $connection = $clientProbe.ConnectAsync('127.0.0.1',$listener.LocalEndpoint.Port)
-    if (-not $connection.Wait(3000) -or -not $clientProbe.Connected) { throw 'Loopback traffic was blocked; local test gateway cannot run.' }
-  } finally { $clientProbe.Dispose(); $listener.Stop() }
-  try {
-    $probe = Invoke-WebRequest 'https://www.microsoft.com' -UseBasicParsing -TimeoutSec 8
-    throw 'External network probe unexpectedly succeeded.'
-  } catch {
-    if ($_.Exception.Message -match 'unexpectedly succeeded') { throw }
-    $before.external_probe_failed = $_.Exception.Message
-  }
+  Assert-NetworkIsolation
   $before.all_external_outbound_blocked = $true
   Write-Output 'External traffic blocked; loopback connectivity verified. Installing the supplied offline environment.'
   $before | ConvertTo-Json | Set-Content artifacts/dev-kit-test/isolation.json -Encoding UTF8
