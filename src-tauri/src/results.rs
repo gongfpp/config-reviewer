@@ -41,6 +41,7 @@ pub fn build_instruction(
     instruction.push_str(
         "每条依据与风险尽量给出原文引用，格式：引用：定位 | 原文片段；无法引用时写“待确认”。\n",
     );
+    instruction.push_str("整改建议必须保持资料已声明的业务目标。不同 Handler 或处理器的能力不得互相推定，资料未证明的能力先标为待确认。存在多项独立风险时，每个备选方案都应说明尚未解决的风险，不得把局部修复描述为消除全部风险。\n");
     instruction.push_str("只输出评审结论本体，不要复述本说明。\n\n");
     instruction.push_str("评审要求：\n");
     instruction.push_str(template_content.trim());
@@ -297,29 +298,57 @@ fn strip_numbered_list_prefix(text: &str) -> &str {
     text.trim()
 }
 
-/// 解析「引用：定位 | 片段」形式的结构化引用。
+/// 支持短前缀及同行多条引用；正文仍由章节解析原样保留。
 fn extract_citations(file: &str, raw: &str) -> Vec<Citation> {
     let mut citations = Vec::new();
     for line in raw.lines() {
-        let trimmed =
-            strip_numbered_list_prefix(line.trim().trim_start_matches(['>', '-', '*', ' ']));
-        let Some(rest) = trimmed.strip_prefix("引用") else {
-            continue;
-        };
-        let rest = rest.trim_start_matches(['：', ':']).trim();
-        if rest.is_empty() {
-            continue;
+        let markers: Vec<_> = line
+            .match_indices("引用")
+            .filter_map(|(index, word)| {
+                let tail = &line[index + word.len()..];
+                tail.strip_prefix('：')
+                    .or_else(|| tail.strip_prefix(':'))
+                    .map(|rest| (index, line.len() - rest.len()))
+            })
+            .collect();
+        for (index, (_, content_start)) in markers.iter().enumerate() {
+            let end = markers
+                .get(index + 1)
+                .map(|(start, _)| *start)
+                .unwrap_or(line.len());
+            let rest = line[*content_start..end].trim();
+            let Some((locator, quoted)) = rest.split_once('|') else {
+                continue;
+            };
+            let locator = locator.trim();
+            // 未给分隔符的“同引用：说明”不构造伪定位；异常长段落也不能当作定位。
+            if locator.is_empty() || locator.chars().count() > 160 {
+                continue;
+            }
+            let quoted = quoted.trim();
+            let snippet = if let Some(code) = quoted.strip_prefix('`') {
+                // 模型通常用代码引号包裹原文，内部表格分隔符属于引用内容。
+                code.split_once('`').map(|(body, _)| body).unwrap_or(code)
+            } else {
+                quoted.split(['；', ';', '。']).next().unwrap_or("")
+            }
+            .trim();
+            if snippet.is_empty() {
+                continue;
+            }
+            let snippet: String = snippet.chars().take(120).collect();
+            if citations
+                .iter()
+                .any(|c: &Citation| c.locator == locator && c.snippet == snippet)
+            {
+                continue;
+            }
+            citations.push(Citation {
+                file: file.to_string(),
+                locator: locator.to_string(),
+                snippet,
+            });
         }
-        let (locator, snippet) = match rest.split_once('|') {
-            Some((l, s)) => (l.trim().to_string(), s.trim().to_string()),
-            None => (rest.to_string(), String::new()),
-        };
-        let snippet: String = snippet.chars().take(120).collect();
-        citations.push(Citation {
-            file: file.to_string(),
-            locator,
-            snippet,
-        });
     }
     citations
 }

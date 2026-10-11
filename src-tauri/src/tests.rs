@@ -1146,3 +1146,44 @@ fn numbered_citations_remain_available_as_basis_and_structured_citations() {
     assert_eq!(result.citations.len(), 1);
     assert_eq!(result.citations[0].snippet, "1234 参数已配置");
 }
+
+#[test]
+fn inline_task_prefixed_citations_extract_separately_without_swallowing_commentary() {
+    let raw = "阻断\n【依据】\n- 9003：引用：XXL-JOB配置.xlsx / Sheet: 发布约定 第11行 | `必填 bizDate、batchNo、dryRun；当前接口无幂等键`；引用：XXL-JOB配置.xlsx / Sheet: 调度运行 第8行 | `9003 | CRON | 0 0 3 * * ?`；六段 Cron 逐位复核。\n【风险】\n- 9004：引用：任务基础第9行 | 报警邮件为空；需确认替代告警。\n【整改项】\n- 9003：补齐 batchNo。";
+    let result = results::parse_result("配置.xlsx", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert!(result.basis[0].starts_with("9003：引用："));
+    assert_eq!(result.citations.len(), 3);
+    assert_eq!(
+        result.citations[0].locator,
+        "XXL-JOB配置.xlsx / Sheet: 发布约定 第11行"
+    );
+    assert_eq!(
+        result.citations[0].snippet,
+        "必填 bizDate、batchNo、dryRun；当前接口无幂等键"
+    );
+    assert_eq!(
+        result.citations[1].locator,
+        "XXL-JOB配置.xlsx / Sheet: 调度运行 第8行"
+    );
+    assert_eq!(result.citations[1].snippet, "9003 | CRON | 0 0 3 * * ?");
+    assert_eq!(result.citations[2].snippet, "报警邮件为空");
+}
+
+#[test]
+fn xls_inline_citations_keep_table_cells_and_skip_shorthand_without_locator() {
+    let raw = "阻断\n【依据】\n- 9006 支付异常订单补偿：依据：引用：发布约定第14行 | `必填 bizDate、dryRun；未读取分片序号`；同引用：`P95 80 秒；两台实例部署相同 Handler`；引用：高级配置第11行 | `SHARDING_BROADCAST（分片广播） | 超时 180 | 失败重试次数 2`；单机串行不能防止跨机重复。\n【风险】\n- 引用：发布约定第14行 | `必填 bizDate、dryRun；未读取分片序号`。\n【整改项】\n- 增加幂等保护。";
+    let result = results::parse_result("配置.xls", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.citations.len(), 2);
+    assert_eq!(result.citations[0].locator, "发布约定第14行");
+    assert_eq!(
+        result.citations[0].snippet,
+        "必填 bizDate、dryRun；未读取分片序号"
+    );
+    assert_eq!(result.citations[1].locator, "高级配置第11行");
+    assert_eq!(
+        result.citations[1].snippet,
+        "SHARDING_BROADCAST（分片广播） | 超时 180 | 失败重试次数 2"
+    );
+}
