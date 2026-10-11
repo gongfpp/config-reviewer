@@ -18,7 +18,7 @@ Copy-Item (Join-Path $root 'docs/compatibility-audit.md') $stage
 $metadata = if (Test-Path (Join-Path $root '.build-source.json')) { Get-Content (Join-Path $root '.build-source.json') -Raw | ConvertFrom-Json } else { @{ source_commit = 'unknown' } }
 $buildInfo = @{ version = $version; source_commit = $metadata.source_commit; platform = 'Windows x64'; webview_install_mode = 'offlineInstaller'; msvc_crt = 'static'; code_signed = $false }
 $buildInfo | ConvertTo-Json | Set-Content (Join-Path $stage 'build-info.json') -Encoding utf8
-$hashes = Get-ChildItem $stage -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $([IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/'))" }
+$hashes = Get-ChildItem $stage -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.FullName.Substring($stage.Length + 1).Replace('\', '/'))" }
 $hashes | Set-Content (Join-Path $stage 'SHA256SUMS.txt') -Encoding utf8
 $archive = Join-Path $root "artifacts/ConfigReviewer-$version-windows-x64-offline.zip"
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force

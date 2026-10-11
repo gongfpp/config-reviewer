@@ -60,3 +60,15 @@ ZIP 解压内容为便于失败重试保留到下次扫描或下次启动清理�
 - 新增四项 Rust 回归：中文表格/重复正文/分块、非法与截断文件、加密与旧版本拒绝、ZIP 内 DOC 路由与预览。Windows UI 检查改用真实中文 DOC，断言表格内容进入模拟网关，继续检查评审、四格式导出、重启历史、取消及重试。
 - 0.1.3 交付包增加独立 `config-reviewer.exe` 和新增依赖许可证。独立 EXE 需要机器已有 WebView2；全新机器使用同包内含 WebView2 的安装 EXE。
 - 本段记录构建输入与测试范围；最终 Windows 成败以对应 Actions 和下载后的校验结果为准，不表示目标内网 Win10 已验收。
+
+### 0.1.3 最终验证结果
+
+- Windows 构建 [38159751716](https://github.com/gongfpp/config-reviewer-builds/actions/runs/38159751716) 全部成功；EXE 对应源码 `d6e5efb600e3757320acab262370e40539bb914f`。
+- macOS 和 Windows 的 43 项 Rust 回归均通过；前端构建通过。Clippy 除上一轮三个 Tauri 扫描命令的参数数量告警外通过（`-D warnings -A clippy::too_many_arguments`）；无新增解析告警。
+- Windows Server 2022 x64：安装包静默安装、静态 CRT 检查、真实安装版 WebView2 UI 检查通过；界面显示版本 0.1.3，DOC 表格内容进入模拟网关。四格式报告写入、历史/凭据重启读取、取消重试均通过。仅保存对话框路径选择被测试替代。
+- 本地已验证下载 ZIP CRC、所有内嵌 SHA256、build-info 的版本/提交号与主程序 x64 PE。最终交付只更新随包文档并附 UI 证据，EXE 与 CI 原件保持逐字节一致。
+- 本轮未重新生成完整离线开发依赖包；源码新增 `rwml/cfb` 依赖，旧 0.1.2 离线源码包不可直接替换源码后声称可断网编译。EXE 运行无需这些开发依赖。目标内网 Win10 22H2、真实网关与业务 DOC 仍需现场验收。
+
+- `ConfigReviewer_0.1.3_x64-setup.exe` SHA256：`65098734fdfab7d4c99c02348a492ec84f1255ba49c9c84b0f8b00c8454f24f4`。
+
+- `config-reviewer.exe` SHA256：`1d379188d31abc752bd9913eb8d6da9361f569b566cf4654f98269edb394a177`。
