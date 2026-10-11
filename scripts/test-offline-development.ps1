@@ -121,6 +121,8 @@ try {
   $env:REVIEWER_EXPECT_SOURCE_EDIT = 'OFFLINE-EDIT-OK'
   & node.exe scripts/windows-ui-smoke.mjs src-tauri/target/x86_64-pc-windows-msvc/debug/config-reviewer.exe
   if ($LASTEXITCODE -ne 0) { throw 'Compiled app UI acceptance failed.' }
+  Copy-Item artifacts/ui-smoke/result.json artifacts/dev-kit-test/ui-first-edit.json
+  Copy-Item artifacts/ui-smoke/results.png artifacts/dev-kit-test/ui-first-edit.png
   # Prove a second modification compiles incrementally; avoids a one-time-only setup.
   [IO.File]::WriteAllText($ui,$text.Replace('配置评审台','配置评审台 OFFLINE-SECOND-EDIT'),(New-Object Text.UTF8Encoding($false)))
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-and-run.ps1
@@ -128,6 +130,8 @@ try {
   $env:REVIEWER_EXPECT_SOURCE_EDIT = 'OFFLINE-SECOND-EDIT'
   & node.exe scripts/windows-ui-smoke.mjs src-tauri/target/x86_64-pc-windows-msvc/debug/config-reviewer.exe
   if ($LASTEXITCODE -ne 0) { throw 'Second source modification was not runnable.' }
+  Copy-Item artifacts/ui-smoke/result.json artifacts/dev-kit-test/ui-second-edit.json
+  Copy-Item artifacts/ui-smoke/results.png artifacts/dev-kit-test/ui-second-edit.png
   [IO.File]::WriteAllText($ui,$text,(New-Object Text.UTF8Encoding($false)))
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-and-run.ps1
   if ($LASTEXITCODE -ne 0) { throw 'Cannot rebuild the original deliverable after source-edit tests.' }
@@ -136,7 +140,9 @@ try {
   Remove-Item Env:/REVIEWER_EXPECT_SOURCE_EDIT
   & node.exe scripts/windows-ui-smoke.mjs ready-to-run/config-reviewer.exe
   if ($LASTEXITCODE -ne 0) { throw 'Relocated original standalone EXE cannot run.' }
-  @{ passed=$true; source_commit=(Get-Content .build-source.json -Raw | ConvertFrom-Json).source_commit; os=$before.os; isolation=$before; source_modification_rebuilds=2; relocated_original_exe_tested=$true; rust_tests=34; ui_test=(Get-Content artifacts/ui-smoke/result.json -Raw | ConvertFrom-Json); windows10_target_tested=$false; dotnet_and_vc_runtime='Preinstalled OS prerequisites; bundled installers are signature-verified but absent-state installation not exercised.' } | ConvertTo-Json -Depth 8 | Set-Content artifacts/dev-kit-test/result.json -Encoding UTF8
+  Copy-Item artifacts/ui-smoke/result.json artifacts/dev-kit-test/ui-original-relocated.json
+  Copy-Item artifacts/ui-smoke/results.png artifacts/dev-kit-test/ui-original-relocated.png
+  @{ passed=$true; source_commit=(Get-Content .build-source.json -Raw | ConvertFrom-Json).source_commit; os=$before.os; isolation=$before; source_modification_rebuilds=2; relocated_original_exe_tested=$true; rust_tests=59; ui_test=(Get-Content artifacts/ui-smoke/result.json -Raw | ConvertFrom-Json); windows10_target_tested=$false; dotnet_and_vc_runtime='Preinstalled OS prerequisites; bundled installers are signature-verified but absent-state installation not exercised.' } | ConvertTo-Json -Depth 8 | Set-Content artifacts/dev-kit-test/result.json -Encoding UTF8
 } finally {
   Restore-Network
   Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
