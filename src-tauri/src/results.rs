@@ -298,37 +298,77 @@ fn strip_numbered_list_prefix(text: &str) -> &str {
     text.trim()
 }
 
-/// 支持短前缀及同行多条引用；正文仍由章节解析原样保留。
+/// 按引号外分隔符切开同行引用，表格内容和中文引号内的分号保持完整。
+fn citation_segments(line: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut quote_end = None;
+    for (index, ch) in line.char_indices() {
+        if let Some(end) = quote_end {
+            if ch == end {
+                quote_end = None;
+            }
+            continue;
+        }
+        quote_end = match ch {
+            '`' => Some('`'),
+            '“' => Some('”'),
+            '「' => Some('」'),
+            '『' => Some('』'),
+            _ => None,
+        };
+        if quote_end.is_some() {
+            continue;
+        }
+        if matches!(ch, '；' | ';') {
+            segments.push(&line[start..index]);
+            start = index + ch.len_utf8();
+        } else if (line[index..].starts_with("引用：") || line[index..].starts_with("引用:"))
+            && index > start
+            && line[start..index].contains('|')
+        {
+            segments.push(&line[start..index]);
+            start = index;
+        }
+    }
+    segments.push(&line[start..]);
+    segments
+}
+
+fn explicit_sheet_locator(locator: &str) -> bool {
+    locator.starts_with("Sheet:")
+        || locator.starts_with("Sheet：")
+        || locator.contains(" / Sheet:")
+        || (locator.contains('!') && locator.contains('第') && locator.ends_with('行'))
+}
+
+/// 支持短前缀及同行省略“引用”但有明确工作表定位的引用；正文保持原样。
 fn extract_citations(file: &str, raw: &str) -> Vec<Citation> {
     let mut citations = Vec::new();
     for line in raw.lines() {
-        let markers: Vec<_> = line
-            .match_indices("引用")
-            .filter_map(|(index, word)| {
-                let tail = &line[index + word.len()..];
-                tail.strip_prefix('：')
-                    .or_else(|| tail.strip_prefix(':'))
-                    .map(|rest| (index, line.len() - rest.len()))
-            })
-            .collect();
-        for (index, (_, content_start)) in markers.iter().enumerate() {
-            let end = markers
-                .get(index + 1)
-                .map(|(start, _)| *start)
-                .unwrap_or(line.len());
-            let rest = line[*content_start..end].trim();
+        for segment in citation_segments(line) {
+            let segment = segment.trim();
+            let explicit = segment
+                .split_once("引用：")
+                .or_else(|| segment.split_once("引用:"));
+            let rest = explicit.map(|(_, rest)| rest).unwrap_or(segment);
             let Some((locator, quoted)) = rest.split_once('|') else {
                 continue;
             };
             let locator = locator.trim();
-            // 未给分隔符的“同引用：说明”不构造伪定位；异常长段落也不能当作定位。
-            if locator.is_empty() || locator.chars().count() > 160 {
+            if locator.is_empty()
+                || locator.chars().count() > 160
+                || (explicit.is_none() && !explicit_sheet_locator(locator))
+            {
                 continue;
             }
             let quoted = quoted.trim();
-            let snippet = if let Some(code) = quoted.strip_prefix('`') {
-                // 模型通常用代码引号包裹原文，内部表格分隔符属于引用内容。
-                code.split_once('`').map(|(body, _)| body).unwrap_or(code)
+            let quoted_pair = [('`', '`'), ('“', '”'), ('「', '」'), ('『', '』')]
+                .into_iter()
+                .find(|(open, _)| quoted.starts_with(*open));
+            let snippet = if let Some((open, close)) = quoted_pair {
+                let body = &quoted[open.len_utf8()..];
+                body.split_once(close).map(|(body, _)| body).unwrap_or(body)
             } else {
                 quoted.split(['；', ';', '。']).next().unwrap_or("")
             }

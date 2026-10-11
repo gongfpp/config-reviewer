@@ -1187,3 +1187,41 @@ fn xls_inline_citations_keep_table_cells_and_skip_shorthand_without_locator() {
         "SHARDING_BROADCAST（分片广播） | 超时 180 | 失败重试次数 2"
     );
 }
+
+#[test]
+fn chinese_quoted_citations_preserve_semicolons_and_following_implicit_sheet_locators() {
+    let raw = "阻断\n【依据】\n9006：引用：Sheet: 发布约定 行14 | “必填 bizDate、dryRun；每次查询当天全部待补偿订单；未读取分片序号；外部接口无幂等键。”；Sheet: 调度运行 行11 | “0 0/15 * * * ? | paymentCompensateJob”；Sheet: 高级配置 行11 | “SHARDING_BROADCAST | SERIAL_EXECUTION | 180 | 2”。两台会全量处理。\n【风险】\n9006：引用：Sheet: 发布约定 行14 | “未读取分片序号；外部接口无幂等键”；Sheet: 高级配置 行11 | “SHARDING_BROADCAST | SERIAL_EXECUTION | 180 | 2”。\n【整改项】\n补充幂等。";
+    let result = results::parse_result("配置.xlsx", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.citations.len(), 4);
+    assert_eq!(
+        result.citations[0].snippet,
+        "必填 bizDate、dryRun；每次查询当天全部待补偿订单；未读取分片序号；外部接口无幂等键。"
+    );
+    assert_eq!(result.citations[1].locator, "Sheet: 调度运行 行11");
+    assert_eq!(
+        result.citations[1].snippet,
+        "0 0/15 * * * ? | paymentCompensateJob"
+    );
+    assert_eq!(result.citations[2].locator, "Sheet: 高级配置 行11");
+    assert_eq!(
+        result.citations[2].snippet,
+        "SHARDING_BROADCAST | SERIAL_EXECUTION | 180 | 2"
+    );
+    assert!(result.basis[0].starts_with("9006：引用："));
+}
+
+#[test]
+fn bang_row_locators_are_extracted_without_repeated_marker_but_narrative_is_not() {
+    let raw = "阻断\n【依据】\n任务ID 9003：引用：调度运行!第8行 | “9003 | CRON | 0 0 3 * * ?”；发布约定!第11行 | “必填 bizDate、batchNo、dryRun；当前接口无幂等键”；高级配置!第8行 | “9003 | ROUND | 300 | 2”；不要把叙述当定位 | 这不是引用。\n【风险】\n重复发放。\n【整改项】\n补充参数。";
+    let result = results::parse_result("配置.xls", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.citations.len(), 3);
+    assert_eq!(result.citations[1].locator, "发布约定!第11行");
+    assert_eq!(
+        result.citations[1].snippet,
+        "必填 bizDate、batchNo、dryRun；当前接口无幂等键"
+    );
+    assert_eq!(result.citations[2].locator, "高级配置!第8行");
+    assert_eq!(result.citations[2].snippet, "9003 | ROUND | 300 | 2");
+}

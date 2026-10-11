@@ -136,7 +136,7 @@ table.data tr:hover td { background: #faf6ee; }
 .sys { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; }
 .sys::before { content: ""; width: 8px; height: 8px; background: var(--sys-color, var(--faint)); }
 select.mini { padding: 5px 8px; border: 1px solid #d8cfbd; border-radius: 2px; background: transparent; font-size: 11.5px; max-width: 190px; }
-.link { color: #8f6f1f; font-size: 12px; background: none; }
+.link { color: #8f6f1f; font-size: 12px; background: none; white-space: nowrap; }
 .link:hover { text-decoration: underline; }
 .link.danger { color: var(--danger); }
 .preview-box { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 2px;

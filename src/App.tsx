@@ -527,7 +527,7 @@ export default function App() {
     const rows = list
       .map(
         (r) =>
-          `<section><h2>${escapeHtml(r.file)}</h2><p class="meta">${systemName(r.system)} · <b class="${verdictClass(
+          `<section><h2>${escapeHtml(r.file)}</h2><p class="meta">${escapeHtml(systemName(r.system))} · <b class="${verdictClass(
             r.verdict
           )}">${r.verdict}</b>${r.chunks > 1 ? ` · ${r.chunks} 块合并` : ""}</p>
            <h3>依据</h3><ul>${r.basis.map((b) => `<li>${escapeHtml(b)}</li>`).join("") || "<li>无</li>"}</ul>
