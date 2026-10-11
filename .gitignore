@@ -27,3 +27,6 @@ artifacts/
 
 .offline/
 tools/
+__pycache__/
+*.pyc
+ready-to-run/
