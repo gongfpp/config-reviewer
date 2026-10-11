@@ -4,10 +4,10 @@
 
 ## 交付与安装
 
-交付物为 `ConfigReviewer-0.1.3-windows-x64-offline.zip`，包含 NSIS 安装 EXE、独立主程序 `config-reviewer.exe`、此说明、环境检查脚本、源码版本记录 `build-info.json` 和 SHA256 清单。安装 EXE 内置 Microsoft WebView2 **完整离线安装器**，不是仍需联网的 bootstrapper。主程序静态链接 MSVC CRT，不要求另装 Node、Rust、Office、SQLite 或 VC++ Redistributable。
+交付物为 `ConfigReviewer-0.1.4-windows-x64-offline.zip`，包含 NSIS 安装 EXE、独立主程序 `config-reviewer.exe`、此说明、环境检查脚本、源码版本记录 `build-info.json` 和 SHA256 清单。安装 EXE 内置 Microsoft WebView2 **完整离线安装器**，不是仍需联网的 bootstrapper。主程序静态链接 MSVC CRT，不要求另装 Node、Rust、Office、SQLite 或 VC++ Redistributable。
 
 1. 在允许联网的电脑下载完整 ZIP，按内网介质管理流程导入。
-2. 使用 `Get-FileHash .\ConfigReviewer_0.1.3_x64-setup.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 核对文件；实际 EXE 名以压缩包内容为准。
+2. 使用 `Get-FileHash .\ConfigReviewer_0.1.4_x64-setup.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 核对文件；实际 EXE 名以压缩包内容为准。
 3. 首次使用运行 `*-setup.exe`。已装好 WebView2 的电脑也可直接运行独立 `config-reviewer.exe`；它本身不包含 WebView2 安装器。默认安装到当前用户目录；WebView2 安装需服从单位权限策略。杀毒/AppLocker/WDAC 阻止 EXE 或 WebView2 时需由管理员放行。本项目没有配置机构代码签名。
 4. 启动「配置评审台」，在「模型与规则」填写网关 Base URL（通常含 `/v1`）、模型标识和 API Key，保存后测试连接。
 5. 默认鉴权为 `Authorization: Bearer <Key>`。要求 `api-key` 或 `X-API-Key` 的网关可填写「API Key 请求头」。默认直连，代理留空，不继承系统外网代理；需要代理时显式填写。
@@ -49,3 +49,7 @@ Windows PowerShell 5.1 可运行 `powershell -ExecutionPolicy Bypass -File .\che
 本机 macOS 回归测试与 Windows CI 编译/凭据测试/安装器冒烟分别提供证据，不等同于目标电脑或真实内网网关验收。执行结果以本轮 [兼容性检查记录](compatibility-audit.md) 为准。
 
 参考：[Tauri 离线 WebView2 安装](https://v2.tauri.app/distribute/windows-installer/#offline-installer)、[Microsoft WebView2 分发](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。
+
+## 0.1.4 评审模块设置
+
+文件匹配、输入说明、评审要求、输出格式和补充要求统一在「评审模块」中配置并保存。「模型与运行」只配置网关、凭据和容量。文件清单不再单独选模板；多个模块按各自规范逐文件评审，同模块可合并评审。旧配置自动迁移并保留备份；分歧模板会保留为独立模块，旧版多个匹配方案仍可选择。

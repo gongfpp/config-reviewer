@@ -1,7 +1,7 @@
 # 配置评审台
 
 内网 Windows 桌面端的**配置 / 文档评审工具**。上传混合发布包（ZIP）或扫描本地目录，自动识别
-Apollo / XXL-JOB / 星云 等来源，调用内网文本 LLM 网关做上线前评审，按系统分组给出结论并导出。
+Apollo / XXL-JOB / 星云 等来源，调用内网文本 LLM 网关做上线前评审，按模块分组给出结论并导出。
 
 需求与技术决策见 [`docs/requirements.md`](docs/requirements.md)；界面设计稿见
 [`prototypes/reviewer-desktop/index.html`](prototypes/reviewer-desktop/index.html)。
@@ -23,7 +23,7 @@ npm run check:rust     # Rust 检查
 cargo test --locked --manifest-path src-tauri/Cargo.toml # 回归测试
 ```
 
-Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https://github.com/gongfpp/config-reviewer-builds) 由 GitHub Actions 构建，内置完整 WebView2 离线安装器，并静态链接 MSVC CRT。交付物是 `ConfigReviewer-0.1.3-windows-x64-offline.zip`，含安装 EXE、独立主程序 EXE、安装说明、环境检查脚本及 SHA256 清单。运行端无需 Node、Rust、Office 或外网连接。私有源码仅以一次性 AES-GCM 加密包进入 runner，不公开明文。
+Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https://github.com/gongfpp/config-reviewer-builds) 由 GitHub Actions 构建，内置完整 WebView2 离线安装器，并静态链接 MSVC CRT。交付物是 `ConfigReviewer-0.1.4-windows-x64-offline.zip`，含安装 EXE、独立主程序 EXE、安装说明、环境检查脚本及 SHA256 清单。运行端无需 Node、Rust、Office 或外网连接。私有源码仅以一次性 AES-GCM 加密包进入 runner，不公开明文。
 
 源码提交并通过本地检查后，可运行 `python3 scripts/dispatch-public-build.py`（需要已登录的 `gh` 与 Python `cryptography`）派发 public Windows 构建。脚本拒绝脏工作区和重叠构建，密钥仅通过 stdin 写入仓库 Secret；交付完成后删除临时输入和 Secret。Windows UI 验收依赖由 `scripts/package.json` 单独固定，不进入运行端。
 
@@ -34,16 +34,16 @@ Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https:
 - [x] 扫描来源：ZIP / 多文件上传、本地目录递归扫描、粘贴文本
 - [x] 通用解析：JSON、Excel（全 Sheet）、Word（段落 + 表格）、文本；UTF-8 / GB18030 回退
 - [x] 后台扫描与解析：发现 / 解压 / 解析进度、实际文件计数、取消；大清单分页显示
-- [x] 规则路由：文件名 / 文件名关键字 / 后缀 / glob → 归属系统 + 评审模板，支持显式新增、启停、排序和持久化
+- [x] 规则路由：文件名 / 文件名关键字 / 后缀 / glob → 评审模块 → 模块评审规范，支持显式新增、启停、排序和持久化
 - [x] 大文件分块（JSON 顶层键优先）与 LLM 合并为文件结论
 - [x] 统一分析单元并发：文件级与块级共享信号量，同文件分块并行、按序合并
 - [x] 内网 OpenAI 兼容网关（流式 + 一次性），并发可配、可取消、失败自动重试（默认 1 次）
-- [x] 分析粒度（逐文件 / 逐文件 + 按系统汇总 / 合并一次性）与输出格式（标准 / 检查表 / 简洁摘要 / JSON）
+- [x] 分析粒度（逐文件 / 逐文件 + 按模块汇总 / 同模块合并评审）与输出格式（标准 / 检查表 / 简洁摘要 / JSON）
 - [x] 发送前「确认数据去向」；失败项可手动重试
-- [x] 按系统分组结果、结构化引用、每系统 LLM 汇总
+- [x] 按模块分组结果、结构化引用、每模块 LLM 汇总
 - [x] 导出 Excel（`系统|文件路径|文件类型|命中规则|结论|引用|时间`）/ JSON / Markdown / HTML
 - [x] 本机 SQLite 历史（任务 + 文件级结果）；搜索、导出、目录来源重评、保留期清理
-- [x] 规则集 / 系统类型 / 模板的增删改，内置模板可恢复
+- [x] 评审模块集中管理：名称、颜色、文件匹配、输入说明、评审要求、输出格式与补充要求；内置规范可恢复
 - [x] 配置持久化、API Key 通过系统凭据库加密（Windows 凭据管理器 / macOS Keychain）
 - [x] Windows 安装包 CI
 
@@ -60,11 +60,15 @@ Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https:
 目标 Windows 10 电脑没有开发环境和外网时，使用[完整离线开发包](docs/offline-development-kit.md)。它同时提供源码、npm/Cargo 依赖、Node、Rust、C++ Build Tools/Windows 10 SDK、WebView2/.NET/VC++ 离线安装程序和便携编辑器。入口依次为 `1-install-environment.cmd`、`2-build-test-run.cmd`、`3-edit-source.cmd`；包内工具在构建进程内启用。
 
 
-## 新增扫描规则与解析链路
+## 配置评审模块与解析链路
 
-在「选择来源」页选好规则集，点击「＋ 新增扫描规则」；也可从「模型与规则 → 扫描规则」添加。每条规则选择匹配方式、条件、归属系统和评审模板，点击「添加并保存规则」后即可重新扫描。新规则置于首位；多条命中时使用第一条启用规则，可在规则列表上下移动并保存。
+进入「评审模块」，选择现有模块或点击「新建模块」。在同一页配置名称、文件匹配条件及评审规范，点击「保存模块配置」。每个模块拥有独立规范；规则只决定归属模块，扫描页不再单独选择模板，运行页也不再覆盖模块输出格式。
 
-例如，文件名都包含 `XXL-JOB` 时，使用「文件名包含关键字：XXL-JOB」，即可让 Excel、Word、TXT 使用同一份 XXL-JOB 模板。若只想匹配特定后缀，分别添加 `xlsx`、`doc`、`docx`、`txt`；高级 glob 可写 `*xxl*.{xlsx,doc,docx,txt}`。关键字指文件名，不搜索正文；匹配不区分大小写，旧配置仍按 glob 解释。
+例如，在 Apollo 模块中添加“文件名包含：阿波罗”，即可让 `阿波罗.txt`、`阿波罗1.doc`、`阿波罗.docx` 使用同一规范。条件支持完整文件名、关键字、后缀及高级 glob；不区分大小写，关键字不搜索正文。多条件命中时采用第一条启用条件，可展开“匹配优先级”调整。PDF 可以命名匹配，但目前不能解析。
+
+模块规范由输入说明、评审要求、输出格式及输出补充要求组成。程序解析文件正文、拼接 Prompt，并按模块输出格式解析模型结果。格式支持标准结论、检查表、简洁摘要和 JSON；补充要求遵循所选格式结构。多个模块逐文件分别执行各自规范；同模块多文件可选择合并评审，不同模块禁止合并。
+
+升级自动迁移旧配置：同一系统曾选择不同模板的规则拆成独立模块，共享模板复制为各模块独立规范，未绑定模板保留为无文件匹配条件的模块。旧版多个规则集作为“文件匹配方案”保留；规范跨方案共用。迁移保留旧配置备份，新版删除模块后重启不会自动恢复。修改模块会使当前扫描清单失效，需重新扫描；历史结果保留，目录重评采用当前模块配置。
 
 扫描阶段只在本机读取内容：Excel 通过 Rust `calamine` 提取各 Sheet 的单元格及行号，Word 通过 ZIP/XML 读取 DOCX、通过内置 Rust 解析器读取 Word 97–2003 二进制 DOC 正文和表格，文本按 UTF-8 / GB18030 等编码读取。点击开始评审并确认数据去向后，才将文本和模板要求发送给配置的模型；大文件分块评审，再合并结论。DOC 不需要安装 Office，也不执行宏；加密文档、Word 6/95、伪装成 DOC 的 RTF/HTML、PDF/图片 OCR 不在当前解析范围。已有自定义规则不会自动改写，可添加 `doc` 后缀规则或使用文件名关键字规则。
 

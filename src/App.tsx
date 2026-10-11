@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
+import ReviewModules from "./ReviewModules";
 import * as api from "./api";
 import type {
   AppConfig,
@@ -15,21 +16,18 @@ import type {
   ReviewFileInput,
   ReviewProgress,
   ReviewSummary,
-  Rule,
   ScanEntry,
   ScanResult,
   ScanProgress,
   SystemFileSummary,
-  SystemType,
   TaskDetail,
   TaskSummary,
-  Template,
 } from "./types";
 
 const GRANULARITY_LABEL: Record<Granularity, string> = {
   per_file: "逐文件",
-  per_file_system: "逐文件 + 按系统汇总",
-  single: "合并一次性",
+  per_file_system: "逐文件 + 按模块汇总",
+  single: "同模块合并评审",
 };
 
 const OUTPUT_FORMAT_LABEL: Record<OutputFormat, string> = {
@@ -98,7 +96,6 @@ export default function App() {
   const [matchedOnly, setMatchedOnly] = useState(true);
   const [textContent, setTextContent] = useState("");
   const [textSystem, setTextSystem] = useState("xxl");
-  const [textTemplate, setTextTemplate] = useState("tpl-xxl");
 
   const [step, setStep] = useState(1);
   const [scan, setScan] = useState<ScanResult | null>(null);
@@ -108,9 +105,6 @@ export default function App() {
   const [scanCancelling, setScanCancelling] = useState(false);
   const [scanPage, setScanPage] = useState(0);
   const activeScanRef = useRef<string | null>(null);
-  const [newRule, setNewRule] = useState<Rule | null>(null);
-  const [ruleError, setRuleError] = useState("");
-  const [savingRule, setSavingRule] = useState(false);
   const [reviewTotal, setReviewTotal] = useState(0);
   const [reviewStage, setReviewStage] = useState("");
   const [connectionTesting, setConnectionTesting] = useState(false);
@@ -132,7 +126,6 @@ export default function App() {
   const [history, setHistory] = useState<TaskSummary[]>([]);
   const [historyDetail, setHistoryDetail] = useState<TaskDetail | null>(null);
   const [historySearch, setHistorySearch] = useState("");
-  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [defaults, setDefaults] = useState<Defaults | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -151,7 +144,6 @@ export default function App() {
       .then(([cfg, key, defs]) => {
         setAppConfig(cfg);
         setActiveRuleSetId(cfg.rule_sets[0]?.id ?? "");
-        setEditingTemplate(cfg.templates[0] ?? null);
         setTextSystem(cfg.systems[1]?.id ?? cfg.systems[0]?.id ?? "other");
         setHasKey(key);
         setDefaults(defs);
@@ -250,7 +242,19 @@ export default function App() {
     stream_enabled: appConfig?.stream_enabled ?? true,
   });
 
-  const updateConfig = (patch: Partial<AppConfig>) => setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
+  const [configDirty, setConfigDirty] = useState(false);
+  const updateConfig = (patch: Partial<AppConfig>) => {
+    setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
+    setConfigDirty(true);
+    if (patch.systems || patch.templates || patch.rule_sets) {
+      setScan(null);
+      setStep(1);
+    }
+  };
+  const moduleTemplate = (id: string | null) => templates.find((t) => t.id === systems.find((s) => s.id === id)?.default_template_id);
+  const mixedModuleMerge = appConfig?.granularity === "single" && new Set((scan?.entries ?? []).filter((e) => e.selected).map((e) => e.system)).size > 1;
+  const selectedFormats = Array.from(new Set((scan?.entries ?? []).filter((e) => e.selected).map((e) => OUTPUT_FORMAT_LABEL[moduleTemplate(e.system)?.output_format ?? "standard"])));
+
 
   const pickFiles = async () => {
     const selected = await open({ multiple: true, directory: false });
@@ -282,6 +286,8 @@ export default function App() {
     setScanProgress({ task_id: requestId, phase: "discover", discovered: 0, processed: 0, total: null, matched: 0, current: "" });
     let unlisten: (() => void) | undefined;
     try {
+      await api.saveSettings(appConfig);
+      setConfigDirty(false);
       // 先完成订阅再调用后端，避免短任务漏掉首个事件。
       unlisten = await listen<ScanProgress>("scan://progress", ({ payload }) => {
         if (payload.task_id === activeScanRef.current) setScanProgress(payload);
@@ -314,7 +320,7 @@ export default function App() {
           requestId,
           content: textContent,
           system: textSystem,
-          templateId: textTemplate,
+          templateId: moduleTemplate(textSystem)?.id ?? "",
           ruleSet,
           threshold: appConfig.chunk_threshold,
           chunkSize: appConfig.chunk_size,
@@ -358,12 +364,18 @@ export default function App() {
       name: e.name,
       kind: e.kind,
       system: e.system,
-      template_id: e.template_id ?? "tpl-generic",
-      template_content: templates.find((t) => t.id === e.template_id)?.content ?? "",
+      template_id: moduleTemplate(e.system)?.id ?? "",
+      template_content: moduleTemplate(e.system)?.content ?? "",
+      output_format: moduleTemplate(e.system)?.output_format ?? "standard",
     }));
 
   const runRequest = async (files: ReviewFileInput[]) => {
     if (!scan || !appConfig) throw new Error("任务未就绪");
+    if (appConfig.granularity === "single" && new Set(files.map((f) => f.system)).size > 1) {
+      throw new Error("合并评审仅支持同一模块的文件；多个模块请使用逐文件评审。");
+    }
+    await api.saveSettings(appConfig);
+    setConfigDirty(false);
     analysisRevisionRef.current += 1;
     activeReviewRef.current = scan.task_id;
     setProgress({});
@@ -398,7 +410,7 @@ export default function App() {
   const autoSummarize = async (list: FileResult[]) => {
     if (!appConfig || appConfig.granularity !== "per_file_system") return;
     const revision = analysisRevisionRef.current;
-    setReviewStage("正在生成系统汇总…");
+    setReviewStage("正在生成模块汇总…");
     const ids = Array.from(new Set(list.map((r) => r.system ?? "other")));
     for (const sys of ids) {
       const items = list.filter((r) => (r.system ?? "other") === sys);
@@ -492,7 +504,7 @@ export default function App() {
     list
       .map(
         (r) =>
-          `## ${r.file}\n\n- 系统：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
+          `## ${r.file}\n\n- 模块：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
             .map((b) => `- ${b}`)
             .join("\n")}\n\n### 风险\n${r.risks.map((b) => `- ${b}`).join("\n")}\n\n### 整改项\n${r.remediations
             .map((b) => `- ${b}`)
@@ -640,145 +652,11 @@ export default function App() {
       return;
     }
     setDirPath(historyDetail.summary.source_ref);
-    const snap = historyDetail.rule_set;
-    if (snap) {
-      setAppConfig((prev) => {
-        if (!prev) return prev;
-        const exists = prev.rule_sets.some((r) => r.id === snap.id);
-        const rule_sets = exists ? prev.rule_sets.map((r) => (r.id === snap.id ? snap : r)) : [...prev.rule_sets, snap];
-        return { ...prev, rule_sets };
-      });
-      setActiveRuleSetId(snap.id);
-    }
     setSource("dir");
     setHistoryDetail(null);
     setView("task");
     setStep(1);
-    toast("已载入来源目录与规则集快照，请重新扫描。");
-  };
-
-  const saveTemplate = async () => {
-    if (!appConfig || !editingTemplate) return;
-    const next = appConfig.templates.map((t) => (t.id === editingTemplate.id ? editingTemplate : t));
-    const nextConfig = { ...appConfig, templates: next };
-    updateConfig({ templates: next });
-    try {
-      await api.saveSettings(nextConfig);
-      toast("模板已保存");
-    } catch (e) {
-      toast(String(e));
-    }
-  };
-
-  const newTemplate = () => {
-    if (!appConfig) return;
-    const tpl: Template = {
-      id: `tpl-custom-${Date.now()}`,
-      name: "新模板",
-      content: "在此填写该模板的评审要求…",
-      builtin: false,
-      overridden: false,
-    };
-    updateConfig({ templates: [...appConfig.templates, tpl] });
-    setEditingTemplate(tpl);
-  };
-
-  const deleteTemplate = (id: string) => {
-    if (!appConfig) return;
-    const next = appConfig.templates.filter((t) => t.id !== id);
-    updateConfig({ templates: next });
-    if (editingTemplate?.id === id) setEditingTemplate(next[0] ?? null);
-    void api.saveSettings({ ...appConfig, templates: next });
-  };
-
-  const restoreBuiltin = () => {
-    if (!editingTemplate) return;
-    const def = defaults?.templates.find((t) => t.id === editingTemplate.id);
-    if (!def) {
-      toast("自定义模板没有内置版本可恢复。");
-      return;
-    }
-    setEditingTemplate({ ...def, overridden: false });
-    toast("已载入内置内容，记得保存。");
-  };
-
-  const newSystem = () => {
-    if (!appConfig) return;
-    const sys: SystemType = {
-      id: `sys-custom-${Date.now()}`,
-      name: "新系统",
-      color: "#a89f8c",
-      default_template_id: templates[0]?.id ?? "tpl-generic",
-    };
-    updateConfig({ systems: [...appConfig.systems, sys] });
-  };
-
-  const updateSystem = (id: string, patch: Partial<SystemType>) => {
-    if (!appConfig) return;
-    updateConfig({ systems: appConfig.systems.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
-  };
-
-  const deleteSystem = (id: string) => {
-    if (!appConfig) return;
-    updateConfig({ systems: appConfig.systems.filter((s) => s.id !== id) });
-  };
-
-  const newRuleSet = () => {
-    if (!appConfig) return;
-    const id = `rs-custom-${Date.now()}`;
-    updateConfig({ rule_sets: [...appConfig.rule_sets, { id, name: "新规则集", builtin: false, rules: [] }] });
-    setActiveRuleSetId(id);
-  };
-
-  const deleteRuleSet = (id: string) => {
-    if (!appConfig) return;
-    if (appConfig.rule_sets.length <= 1) {
-      toast("至少保留一个规则集");
-      return;
-    }
-    const next = appConfig.rule_sets.filter((r) => r.id !== id);
-    updateConfig({ rule_sets: next });
-    if (activeRuleSetId === id) setActiveRuleSetId(next[0]?.id ?? "");
-    void api.saveSettings({ ...appConfig, rule_sets: next });
-  };
-
-  const updateRule = (ruleId: string, patch: Partial<Rule>) => {
-    if (!appConfig || !ruleSet) return;
-    const next = appConfig.rule_sets.map((rs) =>
-      rs.id === ruleSet.id ? { ...rs, rules: rs.rules.map((r) => (r.id === ruleId ? { ...r, ...patch } : r)) } : rs
-    );
-    updateConfig({ rule_sets: next });
-  };
-
-  const openNewRule = () => {
-    if (!ruleSet) return toast("请先新建规则集");
-    const system = systems.find((s) => s.id === "xxl") ?? systems[0];
-    setRuleError("");
-    setNewRule({ id: `r-${crypto.randomUUID()}`, pattern: "", match_type: "keyword",
-      system: system?.id ?? "other", template_id: system?.default_template_id ?? templates[0]?.id ?? "", enabled: true });
-  };
-
-  const addRule = async () => {
-    if (!appConfig || !ruleSet || !newRule || savingRule) return;
-    if (!newRule.pattern.trim()) return setRuleError("请输入匹配条件");
-    const rule = { ...newRule, pattern: newRule.pattern.trim() };
-    // 新规则优先，确保不会被既有宽泛规则遮住；列表可调整顺序。
-    const next = { ...appConfig, rule_sets: appConfig.rule_sets.map((rs) => rs.id === ruleSet.id ? { ...rs, rules: [rule, ...rs.rules] } : rs) };
-    setSavingRule(true);
-    try {
-      await api.saveSettings(next);
-      setAppConfig(next);
-      setNewRule(null);
-      toast("扫描规则已添加并保存，重新扫描后生效");
-    } catch (e) { setRuleError(String(e)); }
-    finally { setSavingRule(false); }
-  };
-
-  const moveRule = (index: number, offset: number) => {
-    if (!appConfig || !ruleSet) return;
-    const rules = [...ruleSet.rules];
-    [rules[index], rules[index + offset]] = [rules[index + offset], rules[index]];
-    updateConfig({ rule_sets: appConfig.rule_sets.map((rs) => rs.id === ruleSet.id ? { ...rs, rules } : rs) });
+    toast("已载入来源目录，将使用当前评审模块重新扫描。");
   };
 
   const saveSettings = async () => {
@@ -789,6 +667,7 @@ export default function App() {
         setHasKey(true);
         setApiKey("");
       }
+      setConfigDirty(false);
       toast("设置已保存");
     } catch (e) {
       toast(String(e));
@@ -819,11 +698,11 @@ export default function App() {
           {history.length > 0 && <span className="badge">{history.length}</span>}
         </button>
         <button className={`nav-item ${view === "templates" ? "is-active" : ""}`} onClick={() => setView("templates")}>
-          <span className="ico">▤</span>模板管理
+          <span className="ico">▤</span>评审模块
         </button>
         <div className="nav-label">配置</div>
         <button className={`nav-item ${view === "settings" ? "is-active" : ""}`} onClick={() => setView("settings")}>
-          <span className="ico">⚙</span>模型与规则
+          <span className="ico">⚙</span>模型与运行
         </button>
         <div className="sidebar-foot">
           <div className="conn">
@@ -843,14 +722,14 @@ export default function App() {
             <h1>
               {view === "task" && "新建评审"}
               {view === "history" && "评审历史"}
-              {view === "templates" && "模板管理"}
-              {view === "settings" && "模型与规则"}
+              {view === "templates" && "评审模块"}
+              {view === "settings" && "模型与运行"}
             </h1>
             <div className="sub">
-              {view === "task" && "上传混合发布包 → 识别系统 → 分系统评审"}
+              {view === "task" && "上传混合发布包 → 识别模块 → 分模块评审"}
               {view === "history" && "本机任务与文件级结果"}
-              {view === "templates" && "配置评审模板，可自定义与覆盖"}
-              {view === "settings" && "内网网关、容量与文件名规则集"}
+              {view === "templates" && "文件匹配 → 评审规范 → 模型输出"}
+              {view === "settings" && "内网网关、凭据与运行容量"}
             </div>
           </div>
           <div className="topbar-actions">
@@ -888,9 +767,9 @@ export default function App() {
             <div className="steps">
               {[
                 ["1", "选择来源", "ZIP / 目录 / 文本"],
-                ["2", "扫描与解析", "识别系统与模板"],
-                ["3", "评审配置", "格式 / 粒度 / 分块"],
-                ["4", "分析结果", "按系统分组"],
+                ["2", "扫描与解析", "识别评审模块"],
+                ["3", "评审配置", "粒度 / 并发 / 分块"],
+                ["4", "分析结果", "按模块分组"],
               ].map(([num, title, sub]) => (
                 <div
                   key={num}
@@ -965,21 +844,11 @@ export default function App() {
                       </div>
                       <div className="field-row">
                         <div className="field">
-                          <label>归属系统</label>
+                          <label>评审模块</label>
                           <select value={textSystem} onChange={(e) => setTextSystem(e.target.value)}>
                             {systems.map((s) => (
                               <option key={s.id} value={s.id}>
                                 {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="field">
-                          <label>评审模板</label>
-                          <select value={textTemplate} onChange={(e) => setTextTemplate(e.target.value)}>
-                            {templates.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
                               </option>
                             ))}
                           </select>
@@ -989,15 +858,13 @@ export default function App() {
                   )}
 
                   <div className="field" style={{ marginTop: 16 }}>
-                    <label htmlFor="source-rule-set">扫描规则集</label>
-                    <div className="inline source-rule-picker">
+                    {appConfig.rule_sets.length > 1 && <><label htmlFor="source-rule-set">文件匹配方案（兼容旧配置）</label>
                       <select id="source-rule-set" value={ruleSet?.id ?? ""} disabled={scanning || running} onChange={(e) => setActiveRuleSetId(e.target.value)}>
                         {appConfig.rule_sets.map((rs) => <option key={rs.id} value={rs.id}>{rs.name}</option>)}
-                      </select>
-                      <button className="btn" onClick={openNewRule} disabled={!ruleSet || scanning || running}>＋ 新增扫描规则</button>
-                      <button className="btn" onClick={() => { setView("settings"); requestAnimationFrame(() => document.getElementById("scan-rules")?.scrollIntoView()); }}>管理规则</button>
-                    </div>
-                    <small>按文件名、文件名关键字或后缀分配系统与评审模板。Excel / Word / TXT 可归属同一系统。</small>
+                      </select></>}
+                    <div className="inline"><span>已配置 {systems.length} 个评审模块</span>
+                      <button className="btn" onClick={() => setView("templates")}>管理评审模块</button></div>
+                    <small>按模块的文件匹配条件自动归属，使用该模块的评审规范。支持 TXT、JSON、Excel、DOC / DOCX；PDF 暂不支持解析。</small>
                   </div>
 
                   <label className="checkline">
@@ -1018,7 +885,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>扫描与解析</h2>
-                  <span className="hint">命中规则自动归属系统与模板，可单独覆盖</span>
+                  <span className="hint">文件自动归入模块，使用模块的评审规范</span>
                   <div className="right">
                     <button className="btn btn-sm" onClick={doScan} disabled={scanning || running}>
                       重新扫描
@@ -1027,7 +894,7 @@ export default function App() {
                 </div>
                 <div className="panel-body">
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <span className="tag">规则集：{scan.rule_set.name}</span>
+                    <span className="tag">匹配方案：{scan.rule_set.name}</span>
                     <span className="muted" style={{ marginLeft: "auto", fontSize: 11.5 }}>
                       命中 {scan.matched_files} / {scan.total_files}
                     </span>
@@ -1040,8 +907,8 @@ export default function App() {
                           <th>文件</th>
                           <th style={{ width: 70 }}>类型</th>
                           <th style={{ width: 80 }}>大小</th>
-                          <th style={{ width: 100 }}>归属系统</th>
-                          <th style={{ width: 200 }}>评审模板</th>
+                          <th style={{ width: 100 }}>评审模块</th>
+                          <th style={{ width: 200 }}>输出格式</th>
                           <th style={{ width: 70 }}>分块</th>
                           <th style={{ width: 60 }}></th>
                         </tr>
@@ -1068,21 +935,7 @@ export default function App() {
                             <td>{(e.size / 1024).toFixed(1)} KB</td>
                             <td>{e.matched ? <span className={`sys ${systemClass(e.system)}`} style={sysStyle(e.system)}>{systemName(e.system)}</span> : <span className="tag skip">未命中</span>}</td>
                             <td>
-                              {e.matched ? (
-                                <select
-                                  className="mini"
-                                  value={e.template_id ?? ""}
-                                  onChange={(ev) => updateEntry(e.path, { template_id: ev.target.value })}
-                                >
-                                  {templates.map((t) => (
-                                    <option key={t.id} value={t.id}>
-                                      {t.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <span className="tag skip">跳过</span>
-                              )}
+                              {e.matched ? <span>{OUTPUT_FORMAT_LABEL[moduleTemplate(e.system)?.output_format ?? "standard"]}</span> : <span className="tag skip">跳过</span>}
                             </td>
                             <td>
                               {e.matched ? (
@@ -1140,22 +993,14 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>评审配置</h2>
-                  <span className="hint">模板已在文件清单按系统自动匹配</span>
+                  <span className="hint">输入、评审要求和输出格式统一来自评审模块</span>
                 </div>
                 <div className="panel-body">
                   <div className="field-row">
                     <div className="field">
-                      <label>输出格式</label>
-                      <select
-                        value={appConfig.output_format}
-                        onChange={(e) => updateConfig({ output_format: e.target.value as OutputFormat })}
-                      >
-                        {(Object.keys(OUTPUT_FORMAT_LABEL) as OutputFormat[]).map((f) => (
-                          <option key={f} value={f}>
-                            {OUTPUT_FORMAT_LABEL[f]}
-                          </option>
-                        ))}
-                      </select>
+                      <label>模块输出格式</label>
+                      <p>{selectedFormats.join(" / ") || "请先扫描并选择文件"}</p>
+                      <small>由各模块的评审规范决定，可在「评审模块」中修改。</small>
                     </div>
                     <div className="field">
                       <label>分析粒度</label>
@@ -1193,9 +1038,10 @@ export default function App() {
                   </div>
                   <p className="muted" style={{ fontSize: 12 }}>
                     {appConfig.granularity === "single"
-                      ? "将把所有选中的文件合并为一次评审。"
-                      : `将分析 ${selectedEntries.length} 个文件${appConfig.granularity === "per_file_system" ? "，并按系统自动生成汇总" : ""}；失败单文件自动隔离并计入失败，不影响其他文件。`}
+                      ? "将同一模块内的所选文件合并评审，核对文件间的一致性。"
+                      : `将分析 ${selectedEntries.length} 个文件${appConfig.granularity === "per_file_system" ? "，并按模块自动生成汇总" : ""}；失败单文件自动隔离并计入失败，不影响其他文件。`}
                   </p>
+                  {mixedModuleMerge && <p className="error-text" role="alert">所选文件属于多个模块，请改为逐文件评审，或返回清单只选择同一模块的文件。</p>}
                   <div className="step-foot">
                     <button className="btn" onClick={() => setStep(2)}>
                       ← 上一步
@@ -1206,7 +1052,7 @@ export default function App() {
                         取消评审
                       </button>
                     ) : (
-                      <button className="btn btn-primary btn-lg" onClick={() => setConfirmOpen(true)} disabled={selectedEntries.length === 0}>
+                      <button className="btn btn-primary btn-lg" onClick={() => setConfirmOpen(true)} disabled={selectedEntries.length === 0 || mixedModuleMerge}>
                         开始评审
                       </button>
                     )}
@@ -1264,7 +1110,7 @@ export default function App() {
                             <h3>{items.length} 个文件</h3>
                             <div className="right">
                               <button className="link" disabled={running || summarizing !== null} onClick={() => summarize(sys)}>
-                                生成系统汇总
+                                生成模块汇总
                               </button>
                             </div>
                           </div>
@@ -1299,7 +1145,7 @@ export default function App() {
                           </table>
                           {summaries[sys] && (
                             <div className="detail-body" style={{ borderTop: "1px solid var(--line)", whiteSpace: "pre-wrap" }}>
-                              <span className="k">系统汇总：</span>
+                              <span className="k">模块汇总：</span>
                               {"\n"}
                               {summaries[sys]}
                             </div>
@@ -1337,7 +1183,7 @@ export default function App() {
                       {detail && (
                         <>
                           <p>
-                            <span className="k">系统：</span>
+                            <span className="k">模块：</span>
                             {systemName(detail.system)}
                             {detail.chunks > 1 ? ` · 基于 ${detail.chunks} 块合并` : ""}
                           </p>
@@ -1417,7 +1263,7 @@ export default function App() {
                 <div className="right">
                   <input
                     className="search"
-                    placeholder="搜索来源 / 系统"
+                    placeholder="搜索来源 / 模块"
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
                   />
@@ -1428,7 +1274,7 @@ export default function App() {
                   <tr>
                     <th>时间</th>
                     <th>来源</th>
-                    <th>含系统</th>
+                    <th>含模块</th>
                     <th>文件数</th>
                     <th>结论分布</th>
                     <th style={{ width: 150 }}>操作</th>
@@ -1508,7 +1354,7 @@ export default function App() {
                   <thead>
                     <tr>
                       <th>文件</th>
-                      <th style={{ width: 90 }}>系统</th>
+                      <th style={{ width: 90 }}>模块</th>
                       <th style={{ width: 110 }}>结论</th>
                     </tr>
                   </thead>
@@ -1531,75 +1377,10 @@ export default function App() {
           </section>
         )}
 
-        {view === "templates" && (
-          <section className="view">
-            <div className="two-col">
-              <div className="panel">
-                <div className="panel-head">
-                  <h2>评审模板</h2>
-                  <div className="right">
-                    <button className="btn btn-sm" onClick={newTemplate}>
-                      新建模板
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  {templates.map((t) => (
-                    <div key={t.id} className={`tpl-item ${editingTemplate?.id === t.id ? "is-active" : ""}`} onClick={() => setEditingTemplate(t)}>
-                      <div>
-                        <strong>{t.name}</strong>
-                        <small>{t.content}</small>
-                      </div>
-                      <span className="tag">{t.builtin ? (t.overridden ? "已覆盖" : "内置") : "自定义"}</span>
-                      {!t.builtin && (
-                        <button
-                          className="link danger"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteTemplate(t.id);
-                          }}
-                        >
-                          删
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="panel">
-                <div className="panel-head">
-                  <h2>编辑模板</h2>
-                  <div className="right">
-                    <button className="btn btn-sm" onClick={restoreBuiltin}>
-                      恢复内置
-                    </button>
-                    <button className="btn btn-primary btn-sm" onClick={saveTemplate}>
-                      保存
-                    </button>
-                  </div>
-                </div>
-                <div className="panel-body">
-                  {editingTemplate ? (
-                    <>
-                      <div className="field">
-                        <label>模板名称</label>
-                        <input value={editingTemplate.name} onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })} />
-                      </div>
-                      <div className="field">
-                        <label>Prompt 内容</label>
-                        <textarea value={editingTemplate.content} onChange={(e) => setEditingTemplate({ ...editingTemplate, content: e.target.value })} />
-                      </div>
-                      <p className="muted" style={{ fontSize: 12 }}>
-                        内置模板可「另存覆盖」；保存后写入本机配置，参与后续评审。
-                      </p>
-                    </>
-                  ) : (
-                    <div className="empty">选择左侧模板进行编辑</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+        {view === "templates" && appConfig && (
+          <ReviewModules config={appConfig} defaults={defaults} activeRuleSetId={activeRuleSetId}
+            onRuleSetChange={setActiveRuleSetId} onChange={updateConfig} disabled={running || scanning}
+            dirty={configDirty} onSave={async () => { await api.saveSettings(appConfig); setConfigDirty(false); }} />
         )}
 
         {view === "settings" && appConfig && (
@@ -1689,207 +1470,16 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="panel" id="scan-rules">
-                <div className="panel-head">
-                  <h2>扫描规则</h2>
-                  <span className="hint">匹配文件 → 系统 + 模板</span>
-                  <div className="right">
-                    <select value={activeRuleSetId} onChange={(e) => setActiveRuleSetId(e.target.value)}>
-                      {appConfig.rule_sets.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button className="btn btn-sm" onClick={newRuleSet}>
-                      新建规则集
-                    </button>
-                    <button className="btn btn-primary btn-sm" onClick={openNewRule} disabled={!ruleSet}>＋ 新增扫描规则</button>
-                    <button className="btn btn-sm" onClick={() => deleteRuleSet(ruleSet?.id ?? "")}>
-                      删除
-                    </button>
-                  </div>
+              <div className="panel">
+                <div className="panel-head"><h2>文件匹配与评审规范</h2></div>
+                <div className="panel-body"><p>每个评审模块统一管理文件匹配、输入说明、评审要求和输出格式。</p>
+                  <button className="btn" onClick={() => setView("templates")}>管理评审模块</button>
                 </div>
-                <div className="panel-body" style={{ paddingTop: 16 }}>
-                  {ruleSet ? (
-                    <>
-                      <div className="field">
-                        <label>规则集名称</label>
-                        <input
-                          value={ruleSet.name}
-                          onChange={(e) => {
-                            const next = appConfig.rule_sets.map((r) => (r.id === ruleSet.id ? { ...r, name: e.target.value } : r));
-                            updateConfig({ rule_sets: next });
-                          }}
-                        />
-                      </div>
-                      <p className="muted">自上而下使用第一条命中规则，不区分大小写。关键字匹配文件名，不搜索正文。修改顺序或条件后请保存规则集。</p>
-                      <div className="table-scroll"><table className="data rule-table">
-                        <thead>
-                          <tr>
-                            <th>启用 / 顺序</th>
-                            <th>匹配方式与条件</th>
-                            <th style={{ width: 110 }}>归属系统</th>
-                            <th style={{ width: 180 }}>评审模板</th>
-                            <th style={{ width: 44 }}></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {ruleSet.rules.map((r, index) => (
-                            <tr key={r.id}>
-                              <td>
-                                <input type="checkbox" aria-label={`启用规则 ${index + 1}`} checked={r.enabled} onChange={(e) => updateRule(r.id, { enabled: e.target.checked })} />
-                                <button className="link" aria-label={`上移规则 ${index + 1}`} disabled={index === 0} onClick={() => moveRule(index, -1)}>↑</button>
-                                <button className="link" aria-label={`下移规则 ${index + 1}`} disabled={index === ruleSet.rules.length - 1} onClick={() => moveRule(index, 1)}>↓</button>
-                              </td>
-                              <td>
-                                <select aria-label={`规则 ${index + 1} 匹配方式`} value={r.match_type ?? "glob"} onChange={(e) => updateRule(r.id, { match_type: e.target.value as Rule["match_type"] })}>
-                                  <option value="filename">文件名完全匹配</option><option value="keyword">文件名包含关键字</option><option value="extension">文件后缀</option><option value="glob">高级 glob</option>
-                                </select>
-                                <input aria-label={`规则 ${index + 1} 匹配条件`} className="cell-input" value={r.pattern} onChange={(e) => updateRule(r.id, { pattern: e.target.value })} />
-                              </td>
-                              <td>
-                                <select className="mini" value={r.system} onChange={(e) => updateRule(r.id, { system: e.target.value })}>
-                                  {systems.map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <select className="mini" value={r.template_id} onChange={(e) => updateRule(r.id, { template_id: e.target.value })}>
-                                  {templates.map((t) => (
-                                    <option key={t.id} value={t.id}>
-                                      {t.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <button
-                                  className="link danger"
-                                  onClick={() => {
-                                    const next = appConfig.rule_sets.map((rs) =>
-                                      rs.id === ruleSet.id ? { ...rs, rules: rs.rules.filter((x) => x.id !== r.id) } : rs
-                                    );
-                                    updateConfig({ rule_sets: next });
-                                  }}
-                                >
-                                  删
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table></div>
-                      {ruleSet.rules.length === 0 && <div className="empty">还没有扫描规则，点击上方“新增扫描规则”添加。</div>}
-                      <div className="inline" style={{ marginTop: 10 }}>
-                        <button className="btn btn-primary btn-sm" onClick={saveSettings}>保存规则集</button>
-                        <small>扫描阶段仅在本机提取文本，确认开始评审后才发送给模型。</small>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="empty">正在加载…</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="panel" style={{ marginTop: 15 }}>
-              <div className="panel-head">
-                <h2>系统类型</h2>
-                <span className="hint">名称 + 颜色 + 默认模板，可扩展</span>
-                <div className="right">
-                  <button className="btn btn-sm" onClick={newSystem}>
-                    新增系统
-                  </button>
-                </div>
-              </div>
-              <div className="panel-body" style={{ paddingTop: 16 }}>
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>系统 ID</th>
-                      <th>名称</th>
-                      <th style={{ width: 120 }}>颜色</th>
-                      <th style={{ width: 190 }}>默认模板</th>
-                      <th style={{ width: 50 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {systems.map((s) => (
-                      <tr key={s.id}>
-                        <td>
-                          <span className="path">{s.id}</span>
-                        </td>
-                        <td>
-                          <input className="cell-input" value={s.name} onChange={(e) => updateSystem(s.id, { name: e.target.value })} />
-                        </td>
-                        <td>
-                          <input
-                            className="cell-input"
-                            type="color"
-                            value={s.color}
-                            onChange={(e) => updateSystem(s.id, { color: e.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <select className="mini" value={s.default_template_id} onChange={(e) => updateSystem(s.id, { default_template_id: e.target.value })}>
-                            {templates.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td>
-                          <button className="link danger" onClick={() => deleteSystem(s.id)} disabled={s.id === "other"}>
-                            删
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                  修改后点击下方「保存设置」写入本机配置。
-                </p>
               </div>
             </div>
           </section>
         )}
       </div>
-
-      {newRule && ruleSet && <div className="modal-mask">
-        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="new-rule-title">
-          <div className="modal-head"><h2 id="new-rule-title">新增扫描规则</h2></div>
-          <div className="modal-body">
-            <p>添加到「{ruleSet.name}」，保存后放在规则列表首位，优先匹配。</p>
-            <div className="field"><label htmlFor="rule-mode">匹配方式</label>
-              <select id="rule-mode" value={newRule.match_type} onChange={(e) => setNewRule({ ...newRule, match_type: e.target.value as Rule["match_type"] })}>
-                <option value="filename">文件名完全匹配</option><option value="keyword">文件名包含关键字</option><option value="extension">文件后缀</option><option value="glob">高级 glob（路径 / 组合）</option>
-              </select>
-            </div>
-            <div className="field"><label htmlFor="rule-pattern">匹配条件</label>
-              <input autoFocus id="rule-pattern" value={newRule.pattern} onChange={(e) => setNewRule({ ...newRule, pattern: e.target.value })} placeholder={newRule.match_type === "extension" ? "xlsx（或 .xlsx）" : newRule.match_type === "filename" ? "XXL-JOB配置.xlsx" : newRule.match_type === "glob" ? "*xxl*.{xlsx,doc,docx,txt}" : "XXL-JOB"} />
-              <small>{newRule.match_type === "keyword" ? "只匹配文件名中的文字，不搜索文档正文。" : newRule.match_type === "extension" ? "每条填写一个后缀；xlsx、doc、docx、txt 可分别添加，使用同一模板。" : "不区分大小写。高级 glob 可匹配相对路径及多个后缀。"}</small>
-            </div>
-            <div className="field"><label htmlFor="rule-system">归属系统</label>
-              <select id="rule-system" value={newRule.system} onChange={(e) => setNewRule({ ...newRule, system: e.target.value, template_id: systems.find((sys) => sys.id === e.target.value)?.default_template_id ?? newRule.template_id })}>
-                {systems.map((sys) => <option key={sys.id} value={sys.id}>{sys.name}</option>)}
-              </select>
-            </div>
-            <div className="field"><label htmlFor="rule-template">评审模板</label>
-              <select id="rule-template" value={newRule.template_id} onChange={(e) => setNewRule({ ...newRule, template_id: e.target.value })}>
-                {templates.map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
-              </select>
-            </div>
-            {ruleError && <p className="error-text" role="alert">{ruleError}</p>}
-          </div>
-          <div className="modal-foot"><button className="btn" disabled={savingRule} onClick={() => setNewRule(null)}>取消</button><button className="btn btn-primary" disabled={savingRule} onClick={addRule}>{savingRule ? "保存中…" : "添加并保存规则"}</button></div>
-        </div>
-      </div>}
 
       {confirmOpen && scan && appConfig && (
         <div className="modal-mask" onClick={() => setConfirmOpen(false)}>
@@ -1915,19 +1505,19 @@ export default function App() {
                     <td className="k">分析对象</td>
                     <td>
                       {appConfig.granularity === "single"
-                        ? `${selectedEntries.length} 个文件（合并一次性）`
+                        ? `${selectedEntries.length} 个文件（同模块合并评审）`
                         : `${selectedEntries.length} 个文件`}
                     </td>
                   </tr>
                   <tr>
                     <td className="k">输出格式 / 粒度</td>
                     <td>
-                      {OUTPUT_FORMAT_LABEL[appConfig.output_format]} · {GRANULARITY_LABEL[appConfig.granularity]}
+                      {selectedFormats.join(" / ")} · {GRANULARITY_LABEL[appConfig.granularity]}
                     </td>
                   </tr>
                 </tbody>
               </table>
-              {!hasKey && <p className="error-text">尚未配置 API Key，请先到「模型与规则」设置。</p>}
+              {!hasKey && <p className="error-text">尚未配置 API Key，请先到「模型与运行」设置。</p>}
             </div>
             <div className="modal-foot">
               <button className="btn" onClick={() => setConfirmOpen(false)}>

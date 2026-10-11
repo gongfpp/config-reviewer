@@ -9,6 +9,9 @@ export interface Template {
   id: string;
   name: string;
   content: string;
+  input_instructions: string;
+  output_instructions: string;
+  output_format: OutputFormat;
   builtin: boolean;
   overridden: boolean;
 }
@@ -102,6 +105,7 @@ export interface ReviewFileInput {
   system: string | null;
   template_id: string;
   template_content: string;
+  output_format: OutputFormat;
 }
 
 export type Granularity = "per_file" | "per_file_system" | "single";
@@ -168,6 +172,7 @@ export interface Defaults {
 
 /** 应用配置（Rust `AppConfig`）；不含 API Key。 */
 export interface AppConfig {
+  schema_version: number;
   base_url: string;
   model: string;
   allow_http: boolean;

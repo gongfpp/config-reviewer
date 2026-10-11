@@ -907,3 +907,182 @@ fn legacy_doc_in_zip_routes_and_parses() {
     assert_eq!(entries[0].system.as_deref(), Some("xxl"));
     assert!(entries[0].preview.contains("orderSyncJob"));
 }
+
+#[test]
+fn module_migration_preserves_conflicting_rules_and_shared_templates() {
+    let mut config = config::AppConfig {
+        schema_version: 0,
+        output_format: "json".into(),
+        ..Default::default()
+    };
+    config.systems[1].default_template_id = "tpl-apollo".into();
+    config.rule_sets[0].rules[0].template_id = "tpl-generic".into();
+    let migrated = config.merged();
+    let rule = &migrated.rule_sets[0].rules[0];
+    assert_ne!(rule.system, "apollo");
+    assert!(migrated
+        .systems
+        .iter()
+        .find(|m| m.id == rule.system)
+        .unwrap()
+        .name
+        .contains("通用文档评审"));
+    assert_eq!(
+        migrated.module_template(&rule.system).unwrap().content,
+        rules::default_templates()
+            .into_iter()
+            .find(|t| t.id == "tpl-generic")
+            .unwrap()
+            .content
+    );
+    assert_eq!(
+        rule.template_id,
+        migrated.module_template(&rule.system).unwrap().id
+    );
+    let unique: std::collections::HashSet<_> = migrated
+        .systems
+        .iter()
+        .map(|m| &m.default_template_id)
+        .collect();
+    assert_eq!(unique.len(), migrated.systems.len());
+    assert!(migrated.templates.iter().all(|t| t.output_format == "json"));
+    let once = serde_json::to_value(&migrated).unwrap();
+    assert_eq!(once, serde_json::to_value(migrated.merged()).unwrap());
+}
+
+#[test]
+fn deleted_modules_and_templates_stay_deleted_after_reload() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut config = config::AppConfig::default();
+    config.systems.clear();
+    config.templates.clear();
+    config.rule_sets.clear();
+    config::save(&path, &config).unwrap();
+    let loaded = config::load(&path);
+    assert!(loaded.systems.is_empty());
+    assert!(loaded.templates.is_empty());
+    assert!(loaded.rule_sets.is_empty());
+}
+
+#[test]
+fn save_derives_rule_template_from_module_and_validates_references() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut config = config::AppConfig::default();
+    config.rule_sets[0].rules[0].template_id = "stale-template".into();
+    config::save(&path, &config).unwrap();
+    assert_eq!(
+        config::load(&path).rule_sets[0].rules[0].template_id,
+        "tpl-apollo"
+    );
+    config.rule_sets[0].rules[0].system = "removed-module".into();
+    assert!(config::save(&path, &config)
+        .unwrap_err()
+        .contains("评审模块不存在"));
+    config.rule_sets.clear();
+    config.systems[0].name = " ".into();
+    assert!(config::save(&path, &config).is_err());
+    config.systems[0].name = "Apollo".into();
+    config.templates[0].content.clear();
+    assert!(config::save(&path, &config).is_err());
+}
+
+fn module_review_request() -> crate::model::ReviewRequest {
+    serde_json::from_value(serde_json::json!({
+        "task_id": "test", "cfg": {"base_url":"http://localhost", "model":"mock"},
+        "files": [{"path":"apollo.txt", "abs_path":"/tmp/apollo.txt", "name":"apollo.txt", "kind":"text", "system":"apollo", "template_id":"stale", "template_content":"UNTRUSTED PROMPT"}]
+    })).unwrap()
+}
+
+#[test]
+fn review_uses_current_module_input_prompt_and_output_contract() {
+    let mut config = config::AppConfig::default();
+    let template = config
+        .templates
+        .iter_mut()
+        .find(|t| t.id == "tpl-apollo")
+        .unwrap();
+    template.input_instructions = "输入为变更前后配置，请对比差异".into();
+    template.output_instructions = "依据中列出所有差异项".into();
+    template.content = "检查新增端点".into();
+    template.output_format = "json".into();
+    let mut request = module_review_request();
+    config.prepare_review(&mut request).unwrap();
+    let file = &request.files[0];
+    assert_eq!(file.template_id, "tpl-apollo");
+    assert_eq!(file.output_format, "json");
+    let instruction = results::build_instruction(
+        &file.template_content,
+        &file.name,
+        None,
+        &file.output_format,
+    );
+    for expected in [
+        "输入为变更前后配置",
+        "依据中列出所有差异项",
+        "检查新增端点",
+        "只输出一个 JSON",
+    ] {
+        assert!(instruction.contains(expected), "missing {expected}");
+    }
+    assert!(!instruction.contains("UNTRUSTED PROMPT"));
+    config
+        .templates
+        .iter_mut()
+        .find(|t| t.id == "tpl-apollo")
+        .unwrap()
+        .content = "新的检查要求".into();
+    config.prepare_review(&mut request).unwrap();
+    assert!(request.files[0].template_content.contains("新的检查要求"));
+    config.systems.retain(|m| m.id != "apollo");
+    assert!(config.prepare_review(&mut request).is_err());
+}
+
+#[test]
+fn combined_review_rejects_mixed_module_contracts() {
+    let config = config::AppConfig::default();
+    let mut request = module_review_request();
+    request.granularity = "single".into();
+    let mut second = request.files[0].clone();
+    second.system = Some("xxl".into());
+    request.files.push(second);
+    assert!(config
+        .prepare_review(&mut request)
+        .unwrap_err()
+        .contains("同一个评审模块"));
+    request.files[1].system = Some("apollo".into());
+    config.prepare_review(&mut request).unwrap();
+}
+
+#[test]
+fn legacy_template_snapshot_deserializes_without_new_fields() {
+    let template: crate::model::Template = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "name":"旧规范", "content":"旧 Prompt", "builtin":false
+    }))
+    .unwrap();
+    assert_eq!(template.output_format, "standard");
+    assert!(template.input_instructions.is_empty());
+    assert!(template.output_instructions.is_empty());
+}
+
+#[test]
+fn migration_is_saved_once_and_subsequent_edits_remain_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut old = config::AppConfig {
+        schema_version: 0,
+        ..Default::default()
+    };
+    old.rule_sets[0].rules[0].template_id = "tpl-generic".into();
+    std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let mut migrated = config::load(&path);
+    let first = serde_json::to_value(&migrated).unwrap();
+    assert_eq!(first, serde_json::to_value(config::load(&path)).unwrap());
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["schema_version"], config::CURRENT_SCHEMA_VERSION);
+    migrated.systems.retain(|m| m.id != "apollo");
+    migrated.templates.retain(|t| t.id != "tpl-apollo");
+    config::save(&path, &migrated).unwrap();
+    assert!(!config::load(&path).systems.iter().any(|m| m.id == "apollo"));
+}

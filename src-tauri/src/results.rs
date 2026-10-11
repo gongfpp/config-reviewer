@@ -2,6 +2,14 @@ use serde_json::Value;
 
 use crate::model::{Citation, FileResult};
 
+/// 模块中输入、评审和输出约定共同形成规范；输出格式由同一模块提供。
+pub fn module_prompt(template: &crate::model::Template) -> String {
+    format!("输入说明：\n{}\n\n评审要求：\n{}\n\n输出补充要求：\n{}\n输出补充要求必须遵循所选输出格式的结构，不能删除必需字段或结论。",
+        if template.input_instructions.trim().is_empty() { "读取所附文件正文；缺失信息标为待确认，不得臆测。" } else { template.input_instructions.trim() },
+        template.content.trim(),
+        if template.output_instructions.trim().is_empty() { "按所选输出格式输出结论、依据、风险和整改建议。" } else { template.output_instructions.trim() })
+}
+
 /// 按输出格式给出结论组织方式的说明。
 fn format_spec(output_format: &str) -> &'static str {
     match output_format {

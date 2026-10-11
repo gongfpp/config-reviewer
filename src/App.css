@@ -218,3 +218,34 @@ progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-colo
 
 .source-rule-picker select { min-width: 0; width: auto; flex: 1; }
 .source-rule-picker .btn { flex-shrink: 0; white-space: nowrap; }
+
+.module-intro { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
+.module-intro strong { font-size: 18px; }
+.module-intro p { color: var(--muted); margin-bottom: 0; }
+.module-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.module-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; align-items: start; }
+.module-list .panel-head { flex-wrap: wrap; gap: 12px; }
+.module-item { display: block; width: 100%; text-align: left; padding: 16px; background: transparent; border-bottom: 1px solid var(--line-soft); }
+.module-item:hover, .module-item.is-active { background: var(--ok-soft); }
+.module-item strong, .module-item small { display: block; }
+.module-item strong { overflow-wrap: anywhere; }
+.module-item small { margin-top: 8px; color: var(--muted); }
+.module-item i { display: inline-block; width: 9px; height: 9px; margin-right: 8px; }
+.module-editor .panel-head { flex-wrap: wrap; gap: 10px; }
+.module-color { max-width: 110px; }
+.module-section { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
+.module-section h3 { margin: 0 0 8px; font-size: 15px; }
+.module-section p { line-height: 1.7; }
+.module-section textarea { min-height: 92px; }
+.module-section textarea.review-prompt { min-height: 170px; }
+.module-rule { display: grid; grid-template-columns: 18px 140px minmax(100px, 1fr) 42px; align-items: center; gap: 8px; margin: 10px 0; }
+.module-success { color: var(--ok); }
+.module-priority { margin-top: 18px; }
+.module-priority summary { padding: 16px; cursor: pointer; }
+.module-priority li { padding: 8px 0; }
+.module-priority li span { display: inline-block; width: calc(100% - 90px); overflow-wrap: anywhere; }
+.module-priority li button { margin-left: 4px; }
+@media (max-width: 1000px) { .module-layout { grid-template-columns: 1fr; } .module-rule { grid-template-columns: 18px 120px minmax(70px, 1fr) 40px; } }
+.module-rule select, .module-rule input:not([type="checkbox"]) { min-width: 0; width: 100%; border: 1px solid #d8cfbd; padding: 8px; background: var(--surface); color: inherit; font: inherit; border-radius: 2px; }
+.module-color input { height: 40px; padding: 4px; }
+.module-editor .panel-head { position: sticky; top: 0; z-index: 2; background: var(--surface); }

@@ -59,12 +59,10 @@ pub fn load_config(state: State<'_, AppState>) -> AppConfig {
 #[tauri::command]
 pub fn save_settings(
     state: State<'_, AppState>,
-    config: AppConfig,
+    mut config: AppConfig,
     api_key: Option<String>,
 ) -> Result<(), String> {
-    for rule_set in &config.rule_sets {
-        rules::validate(rule_set)?;
-    }
+    config.normalize_and_validate()?;
     if let Some(key) = api_key {
         if !key.trim().is_empty() {
             secrets::save_api_key(&key)?;
@@ -100,14 +98,11 @@ fn reserve_task(state: &AppState, task_id: &str) -> Result<Arc<AtomicBool>, Stri
 enum ScanSource {
     Directory(String),
     Uploads(Vec<String>),
-    Text {
-        content: String,
-        system: String,
-        template_id: String,
-    },
+    Text { content: String, system: String },
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 参数保持兼容。
 pub async fn scan_directory(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -134,6 +129,7 @@ pub async fn scan_directory(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 参数保持兼容。
 pub async fn scan_uploads(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -159,6 +155,7 @@ pub async fn scan_uploads(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 参数保持兼容。
 pub async fn scan_text(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -170,14 +167,12 @@ pub async fn scan_text(
     chunk_size: usize,
     request_id: Option<String>,
 ) -> Result<ScanResult, String> {
+    // 保留 IPC 参数兼容旧客户端；真实规范只由模块决定。
+    let _ = template_id;
     run_scan(
         app,
         state,
-        ScanSource::Text {
-            content,
-            system,
-            template_id,
-        },
+        ScanSource::Text { content, system },
         rule_set,
         false,
         false,
@@ -225,6 +220,8 @@ async fn run_scan(
         };
         observer(&progress)?;
         let cfg = config::load(&config_path);
+        let mut rule_set = rule_set;
+        cfg.normalize_rule_set(&mut rule_set)?;
         let opts = scan_opts(&cfg, recursive, matched_only, threshold, chunk_size);
         let workspace = fresh_workspace(&root, &worker_id)?;
         let result = (|| {
@@ -260,11 +257,8 @@ async fn run_scan(
                     };
                     ("upload", source_ref, entries)
                 }
-                ScanSource::Text {
-                    content,
-                    system,
-                    template_id,
-                } => {
+                ScanSource::Text { content, system } => {
+                    let template_id = cfg.module_template(&system)?.id.clone();
                     if content.trim().is_empty() {
                         return Err("内容为空".into());
                     }
@@ -417,7 +411,7 @@ pub fn cancel_review(state: State<'_, AppState>, task_id: String) {
 pub async fn run_review(
     app: AppHandle,
     state: State<'_, AppState>,
-    request: ReviewRequest,
+    mut request: ReviewRequest,
 ) -> Result<ReviewSummary, String> {
     let task_id = if request.task_id.trim().is_empty() {
         Uuid::new_v4().to_string()
@@ -426,7 +420,10 @@ pub async fn run_review(
     };
     let cancel = reserve_task(&state, &task_id)?;
 
-    let outcome = run_review_inner(&app, &state, &request, &task_id, &cancel).await;
+    let outcome = match config::load(&state.config_path).prepare_review(&mut request) {
+        Ok(()) => run_review_inner(&app, &state, &request, &task_id, &cancel).await,
+        Err(error) => Err(error),
+    };
 
     state.cancels.lock().unwrap().remove(&task_id);
     // 工作区推迟到下一次扫描或应用退出时清理，以便失败项重试仍能读取文件。
@@ -458,7 +455,7 @@ async fn run_review_inner(
     let mut cfg = request.cfg.clone();
     cfg.api_key = secrets::load_api_key();
     if cfg.api_key.trim().is_empty() {
-        return Err("未配置 API Key，请在「模型与规则」中填写。".into());
+        return Err("未配置 API Key，请在「设置」中填写。".into());
     }
     if cfg.base_url.trim().is_empty() || cfg.model.trim().is_empty() {
         return Err("请先配置 Base URL 与模型标识。".into());
@@ -468,7 +465,11 @@ async fn run_review_inner(
     let threshold = request.chunk_threshold.max(1000);
     let chunk_size = request.chunk_size.max(500);
     let retry_count = request.retry_count.min(5);
-    let output_format = request.output_format.clone();
+    let output_format = request
+        .files
+        .first()
+        .map(|f| f.output_format.clone())
+        .unwrap_or_else(|| "standard".into());
     // 统一分析单元信号量：文件级与块级共享同一并发上限。
     let sem = Arc::new(Semaphore::new(concurrency));
 
@@ -497,7 +498,7 @@ async fn run_review_inner(
             let sem = sem.clone();
             let cancel = cancel.clone();
             let task_id = task_id.to_string();
-            let output_format = output_format.clone();
+            let output_format = file.output_format.clone();
             async move {
                 review_one(
                     &app,
@@ -891,8 +892,8 @@ async fn review_combined(
     let mut result = match raw {
         Ok(text) => results::parse_result(
             &file_name,
-            None,
-            "tpl-generic",
+            files.first().and_then(|f| f.system.clone()),
+            files.first().map(|f| f.template_id.as_str()).unwrap_or(""),
             parsed.chunks.len(),
             duration_ms,
             &text,

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// 一条文件名规则：glob 模式 + 归属系统 + 评审模板。
+/// 一条文件名规则：匹配条件 + 归属评审模块；template_id 仅为兼容字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub id: String,
@@ -21,7 +21,7 @@ fn default_true() -> bool {
     true
 }
 
-/// 系统类型：数据驱动、可扩展。
+/// 评审模块；default_template_id 是该模块唯一的评审规范来源。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemType {
     pub id: String,
@@ -36,6 +36,12 @@ pub struct Template {
     pub id: String,
     pub name: String,
     pub content: String,
+    #[serde(default)]
+    pub input_instructions: String,
+    #[serde(default)]
+    pub output_instructions: String,
+    #[serde(default = "default_output_format")]
+    pub output_format: String,
     pub builtin: bool,
     #[serde(default)]
     pub overridden: bool,
@@ -190,6 +196,8 @@ pub struct ReviewFileInput {
     pub system: Option<String>,
     pub template_id: String,
     pub template_content: String,
+    #[serde(default = "default_output_format")]
+    pub output_format: String,
 }
 
 /// 分析进度事件负载。
