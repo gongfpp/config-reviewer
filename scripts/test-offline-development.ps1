@@ -8,6 +8,9 @@ Set-Location $root
 New-Item -ItemType Directory -Force artifacts/dev-kit-test | Out-Null
 Start-Transcript artifacts/dev-kit-test/full-test.log
 $profiles = @(Get-NetFirewallProfile | Select-Object Name,Enabled,DefaultOutboundAction)
+$originalAllowRules = @(Get-NetFirewallRule -Direction Outbound -Enabled True -Action Allow | Select-Object -ExpandProperty Name)
+$agentPaths = @(Get-Process | Where-Object { $_.ProcessName -in @('Runner.Worker','Runner.Listener') } | ForEach-Object { $_.Path } | Where-Object { $_ } | Select-Object -Unique)
+if ($agentPaths.Count -eq 0) { throw 'Cannot identify the CI control-plane processes.' }
 $before = @{ os=(Get-CimInstance Win32_OperatingSystem).Caption; existing_compilers_removed=$false; tool_paths_isolated=$false; all_external_outbound_blocked=$false; target_windows10_tested=$false }
 try {
   foreach ($name in @('install-offline-environment.ps1','enter-dev-environment.ps1','verify-kit.ps1','build-and-run.ps1')) {
@@ -15,8 +18,25 @@ try {
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $name),[ref]$tokens,[ref]$parseErrors) | Out-Null
     if ($parseErrors) { throw "PowerShell 5.1 syntax error in $name`: $parseErrors" }
   }
-  # Validate the firewall command before spending time removing preinstalled VS.
-  New-NetFirewallRule -Name ReviewerOfflineAcceptance -DisplayName ReviewerOfflineAcceptance -Direction Outbound -Action Block -RemoteAddress Any -Profile Any -Enabled False | Out-Null
+  # All outbound traffic defaults to blocked; only the CI agent and DNS retain connectivity.
+  $ruleIndex = 0
+  foreach ($agentPath in $agentPaths) {
+    New-NetFirewallRule -Name ("ReviewerOfflineAgent-" + $ruleIndex++) -DisplayName ReviewerOfflineAgent -Direction Outbound -Action Allow -Program $agentPath -Profile Any -Enabled False | Out-Null
+  }
+  $dnsServers = @(Get-DnsClientServerAddress | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ } | Select-Object -Unique)
+  if ($dnsServers.Count) {
+    New-NetFirewallRule -Name ReviewerOfflineDns -DisplayName ReviewerOfflineDns -Direction Outbound -Action Allow -Protocol UDP -RemotePort 53 -RemoteAddress $dnsServers -Profile Any -Enabled False | Out-Null
+  }
+  function Enable-OfflineIsolation {
+    foreach ($name in $originalAllowRules) { Disable-NetFirewallRule -Name $name | Out-Null }
+    Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Enable-NetFirewallRule | Out-Null
+    Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
+  }
+  function Restore-Network {
+    Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Disable-NetFirewallRule | Out-Null
+    foreach ($profile in $profiles) { Set-NetFirewallProfile -Profile $profile.Name -Enabled $profile.Enabled -DefaultOutboundAction $profile.DefaultOutboundAction }
+    foreach ($name in $originalAllowRules) { Enable-NetFirewallRule -Name $name | Out-Null }
+  }
   function Assert-NetworkIsolation {
     $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0)
     $clientProbe = New-Object Net.Sockets.TcpClient
@@ -33,11 +53,9 @@ try {
       $before.external_probe_failed = $_.Exception.Message
     }
   }
-  Enable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
-  Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+  Enable-OfflineIsolation
   Assert-NetworkIsolation
-  Disable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
-  foreach ($profile in $profiles) { Set-NetFirewallProfile -Profile $profile.Name -Enabled $profile.Enabled -DefaultOutboundAction $profile.DefaultOutboundAction }
+  Restore-Network
   Write-Output 'Firewall isolation preflight passed.'
   Write-Output 'Removing preinstalled C++ compiler instances from this disposable runner.'
   # Remove the runner's compiler installation rather than accidentally validating it.
@@ -73,12 +91,12 @@ try {
   if ($existing -and $existing.pv -and $existing.pv -ne '0.0.0.0') { throw 'WebView2 still installed.' }
   $before.webview2_absent_before_install = $true
   $before.sdk19041_preinstalled = Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Include/10.0.19041.0')
-  # Block external traffic for every process, including installer service children.
-  # Loopback is excluded by the Windows firewall, so the local mock LLM stays usable.
-  Enable-NetFirewallRule -Name ReviewerOfflineAcceptance | Out-Null
-  Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+  # Installer/compiler/service children cannot access the internet. Agent/DNS exceptions
+  # keep the remote test observable; they are explicitly recorded, not claimed as air-gap.
+  Enable-OfflineIsolation
   Assert-NetworkIsolation
-  $before.all_external_outbound_blocked = $true
+  $before.development_tool_outbound_blocked = $true
+  $before.network_exceptions = @{ ci_agent=$agentPaths; dns=$dnsServers; loopback=$true }
   Write-Output 'External traffic blocked; loopback connectivity verified. Installing the supplied offline environment.'
   $before | ConvertTo-Json | Set-Content artifacts/dev-kit-test/isolation.json -Encoding UTF8
   # Windows PowerShell 5.1 parses and runs the user entrypoints, not pwsh 7.
@@ -120,8 +138,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Relocated original standalone EXE cannot run.' }
   @{ passed=$true; source_commit=(Get-Content .build-source.json -Raw | ConvertFrom-Json).source_commit; os=$before.os; isolation=$before; source_modification_rebuilds=2; relocated_original_exe_tested=$true; rust_tests=34; ui_test=(Get-Content artifacts/ui-smoke/result.json -Raw | ConvertFrom-Json); windows10_target_tested=$false; dotnet_and_vc_runtime='Preinstalled OS prerequisites; bundled installers are signature-verified but absent-state installation not exercised.' } | ConvertTo-Json -Depth 8 | Set-Content artifacts/dev-kit-test/result.json -Encoding UTF8
 } finally {
-  Remove-NetFirewallRule -Name ReviewerOfflineAcceptance -ErrorAction SilentlyContinue
-  foreach ($profile in $profiles) { Set-NetFirewallProfile -Profile $profile.Name -Enabled $profile.Enabled -DefaultOutboundAction $profile.DefaultOutboundAction }
+  Restore-Network
+  Get-NetFirewallRule -Name 'ReviewerOfflineAgent-*','ReviewerOfflineDns' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
   Get-ChildItem "$env:TEMP/dd_*" -ErrorAction SilentlyContinue | Copy-Item -Destination artifacts/dev-kit-test -ErrorAction SilentlyContinue
   Stop-Transcript
 }

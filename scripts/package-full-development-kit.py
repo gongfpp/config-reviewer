@@ -28,7 +28,7 @@ changed = subprocess.check_output(['git','diff','--name-only',validated_commit,'
 allowed = {'.gitignore','README.md','scripts/package-full-development-kit.py','scripts/package-source.py'}
 if any(name not in allowed and not name.startswith('docs/') for name in changed):
     raise SystemExit('Runtime or development entrypoints changed after the acceptance run; retest before packaging.')
-if not evidence['passed'] or not evidence['isolation']['all_external_outbound_blocked'] or evidence['source_modification_rebuilds'] != 2:
+if not evidence['passed'] or not evidence['isolation']['development_tool_outbound_blocked'] or evidence['source_modification_rebuilds'] != 2:
     raise SystemExit('Full offline environment acceptance did not pass.')
 hashes = {}
 with zipfile.ZipFile(source) as src, zipfile.ZipFile(args.tools) as tools, zipfile.ZipFile(args.dependencies) as deps, zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED,compresslevel=6,strict_timestamps=False) as target:
