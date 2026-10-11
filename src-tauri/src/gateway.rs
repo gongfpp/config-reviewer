@@ -22,6 +22,7 @@ fn endpoint(base_url: &str) -> String {
 fn build_client(cfg: &GatewayConfig) -> Result<reqwest::Client, String> {
     // 内网默认直连，避免继承电脑上的外网代理。
     let mut builder = reqwest::Client::builder()
+        .user_agent(concat!("config-reviewer/", env!("CARGO_PKG_VERSION")))
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
@@ -78,6 +79,14 @@ fn request(
     } else {
         req = req.header(cfg.api_key_header.trim(), cfg.api_key.trim());
     }
+    if uses_opencode_go(&cfg.base_url) {
+        let session = if cfg.session_id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            cfg.session_id.clone()
+        };
+        req = req.header("x-opencode-session", session);
+    }
     Ok(req.json(&json!({ "model": cfg.model.trim(), "messages": [{ "role": "user", "content": content }], "stream": stream })))
 }
 
@@ -103,17 +112,68 @@ pub async fn chat(cfg: &GatewayConfig, content: &str) -> Result<String, String> 
         .send()
         .await
         .map_err(|e| format!("模型请求失败：{e}"))?;
-    check_status(&resp)?;
+    let resp = checked_response(resp, cfg, None).await?;
     let bytes = read_body(resp, None).await?;
     let value = serde_json::from_slice(&bytes).map_err(|e| format!("模型响应解析失败：{e}"))?;
     extract_content(&value)
 }
 
-fn check_status(resp: &reqwest::Response) -> Result<(), String> {
-    if !resp.status().is_success() {
-        return Err(format!("模型服务返回 HTTP {}", resp.status()));
+fn uses_opencode_go(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url.trim()).is_ok_and(|url| {
+        url.host_str() == Some("opencode.ai") && url.path().starts_with("/zen/go/")
+    })
+}
+
+fn error_detail(bytes: &[u8], api_key: &str) -> Option<String> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let error = value.get("error").unwrap_or(&value);
+    let detail = ["type", "message"]
+        .into_iter()
+        .filter_map(|key| error.get(key).and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("：");
+    if detail.trim().is_empty() {
+        return None;
     }
-    Ok(())
+    // 必须先替换完整 Key 再截断，避免返回截断后的部分凭据。
+    let safe = if api_key.trim().is_empty() {
+        detail
+    } else {
+        detail.replace(api_key.trim(), "[已隐藏]")
+    };
+    Some(
+        safe.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(600)
+            .collect(),
+    )
+}
+
+async fn checked_response(
+    resp: reqwest::Response,
+    cfg: &GatewayConfig,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<reqwest::Response, String> {
+    if resp.status().is_success() {
+        return Ok(resp);
+    }
+    let status = resp.status();
+    let mut stream = resp.bytes_stream();
+    let mut bytes = Vec::new();
+    const MAX_ERROR_BYTES: usize = 16 * 1024;
+    while let Some(chunk) = cancellable(stream.next(), cancel).await? {
+        let Ok(chunk) = chunk else {
+            break;
+        };
+        if bytes.len() + chunk.len() > MAX_ERROR_BYTES {
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let detail = error_detail(&bytes, &cfg.api_key)
+        .map(|s| format!("：{s}"))
+        .unwrap_or_default();
+    Err(format!("模型服务返回 HTTP {status}{detail}"))
 }
 
 async fn read_body(
@@ -226,7 +286,7 @@ where
     )
     .await?
     .map_err(|e| format!("模型请求失败：{e}"))?;
-    check_status(&resp)?;
+    let resp = checked_response(resp, cfg, cancel.as_ref()).await?;
     let is_json = resp
         .headers()
         .get("content-type")
@@ -291,7 +351,9 @@ where
 }
 
 pub async fn test_connection(cfg: &GatewayConfig) -> Result<String, String> {
-    let reply = chat_stream(cfg, "回复两个字：可用", None, |_| {}).await?;
+    let mut cfg = cfg.clone();
+    cfg.session_id = uuid::Uuid::new_v4().to_string();
+    let reply = chat_stream(&cfg, "回复两个字：可用", None, |_| {}).await?;
     Ok(reply.trim().chars().take(40).collect())
 }
 
@@ -312,4 +374,65 @@ fn extract_content(value: &Value) -> Result<String, String> {
         return Err("模型返回为空或缺少内容。".into());
     }
     Ok(text.to_string())
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    fn config(url: &str) -> GatewayConfig {
+        serde_json::from_value(
+            json!({ "base_url": url, "model": "test", "api_key": "private-test-key" }),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn opencode_session_is_stable_scoped_and_runtime_only() {
+        let mut cfg = config("https://opencode.ai/zen/go/v1");
+        cfg.session_id = "review-task-42".into();
+        for _ in 0..3 {
+            let built = request(&cfg, "chunk or retry", true)
+                .unwrap()
+                .build()
+                .unwrap();
+            assert_eq!(built.headers()["x-opencode-session"], "review-task-42");
+        }
+        for url in [
+            "https://opencode.ai/zen/v1",
+            "https://opencode.ai/zen/go-other/v1",
+            "https://opencode.ai.example.com/zen/go/v1",
+            "https://other.example/zen/go/v1",
+        ] {
+            cfg.base_url = url.into();
+            assert!(!request(&cfg, "test", false)
+                .unwrap()
+                .build()
+                .unwrap()
+                .headers()
+                .contains_key("x-opencode-session"));
+        }
+        assert!(serde_json::to_value(&cfg)
+            .unwrap()
+            .get("session_id")
+            .is_none());
+        let parsed: GatewayConfig = serde_json::from_value(json!({ "base_url":"https://opencode.ai/zen/go/v1", "model":"test", "api_key":"test", "session_id":"injected" })).unwrap();
+        assert!(parsed.session_id.is_empty());
+        let first = request(&parsed, "test", false).unwrap().build().unwrap();
+        let second = request(&parsed, "test", false).unwrap().build().unwrap();
+        assert_ne!(
+            first.headers()["x-opencode-session"],
+            second.headers()["x-opencode-session"]
+        );
+    }
+
+    #[test]
+    fn http_error_detail_redacts_before_truncating_and_limits_output() {
+        let body = serde_json::to_vec(&json!({"error":{"type":"MissingSessionID", "message":format!("{}private-test-key {}", "a".repeat(590), "b".repeat(2000))}})).unwrap();
+        let error = error_detail(&body, "private-test-key").unwrap();
+        assert!(error.starts_with("MissingSessionID"));
+        assert!(error.chars().count() <= 600);
+        assert!(!error.contains("private-test"));
+        assert!(error_detail(b"<html>private-test-key</html>", "private-test-key").is_none());
+    }
 }

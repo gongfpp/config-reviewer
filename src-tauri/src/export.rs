@@ -1,7 +1,7 @@
 use rust_xlsxwriter::{Format, Workbook};
 use serde::{Deserialize, Serialize};
 
-/// 导出一行：系统 | 文件路径 | 文件类型 | 命中规则 | 结论 | 引用 | 时间
+/// 导出一行：评审模块 | 文件路径 | 文件类型 | 命中规则 | 结论 | 引用 | 时间
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRow {
     pub system: String,
@@ -14,7 +14,7 @@ pub struct ExportRow {
 }
 
 const HEADERS: [&str; 7] = [
-    "系统",
+    "评审模块",
     "文件路径",
     "文件类型",
     "命中规则",

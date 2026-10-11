@@ -15,6 +15,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--workflow', default='windows.yml', choices=['windows.yml', 'source-kit.yml', 'development-kit.yml'])
 parser.add_argument('--tools-run', help='Verified public tool-preparation workflow run ID')
+parser.add_argument('--dependencies-run', help='Windows dependency preparation workflow run ID')
+parser.add_argument('--clean-fixture', action='store_true', help='Remove existing compiler and SDK caches on the disposable acceptance runner')
 options = parser.parse_args()
 
 def run(args, *, input=None, check=True):
@@ -28,10 +30,7 @@ def run(args, *, input=None, check=True):
 
 if run(['git', 'status', '--porcelain']).stdout.strip():
     raise SystemExit('请先提交改动；构建只接受可追溯的干净 Git 快照。')
-isolated = options.workflow == 'development-kit.yml'
-active = json.loads(run(['gh', 'run', 'list', '--repo', REPO, '--limit', '10', '--json', 'status']).stdout)
-if not isolated and any(item['status'] in ('queued', 'in_progress', 'waiting', 'pending') for item in active):
-    raise SystemExit('请等 public 仓库当前构建结束后再生成新密钥，避免影响排队中的构建。')
+isolated = True  # Each supported workflow accepts independent source secrets.
 sha = run(['git', 'rev-parse', '--short', 'HEAD']).stdout.strip()
 version = json.loads((ROOT / 'package.json').read_text())['version']
 tag = f'source-{version}-{sha}'
@@ -53,12 +52,17 @@ with tempfile.TemporaryDirectory(prefix='reviewer-encrypted-build-') as temp:
         run(['gh', 'release', 'create', tag, '--repo', REPO, '--target', 'main', '--title', f'临时加密构建输入 {sha}', '--notes-file', str(notes)])
     run(['gh', 'release', 'upload', tag, str(asset), '--repo', REPO, '--clobber'])
 arguments = ['gh', 'workflow', 'run', options.workflow, '--repo', REPO, '-f', f'source_tag={tag}']
-if options.tools_run:
-    arguments += ['-f', f'tools_run={options.tools_run}']
 if isolated:
     arguments += ['-f', f'source_key_secret={key_secret}', '-f', f'source_hash_secret={hash_secret}']
+if options.tools_run:
+    arguments += ['-f', f'tools_run={options.tools_run}']
+if options.dependencies_run:
+    arguments += ['-f', f'dependencies_run={options.dependencies_run}']
+if options.clean_fixture:
+    arguments += ['-f', 'clean_fixture=true']
 run(arguments)
 descriptor = ROOT/'artifacts/build-dispatch'/f'{tag}.json'
 descriptor.parent.mkdir(parents=True,exist_ok=True)
 descriptor.write_text(json.dumps({'source_tag':tag,'source_commit':sha,'key_secret':key_secret,'hash_secret':hash_secret,'workflow':options.workflow},indent=2))
 print(f'已启动 public Windows 构建：源码 {sha}，输入 {tag}')
+print(f'构建完成后清理 Secret 名称：{key_secret}、{hash_secret}')

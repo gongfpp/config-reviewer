@@ -11,6 +11,7 @@ use zip::write::SimpleFileOptions;
 
 fn cfg(url: String) -> model::GatewayConfig {
     model::GatewayConfig {
+        session_id: String::new(),
         base_url: url,
         model: "mock-model".into(),
         api_key: "mock-key".into(),
@@ -371,7 +372,7 @@ fn standard_sections_and_verdict_are_parsed() {
     assert_eq!(r.verdict, "有条件通过");
     assert_eq!(r.basis, vec!["配置完整"]);
     assert_eq!(r.risks, vec!["缺回滚"]);
-    assert_eq!(r.remediations, vec!["补回滚"]);
+    assert_eq!(r.remediations, vec!["补回滚", "引用：$.key | value"]);
     assert_eq!(r.citations.len(), 1);
     assert_eq!(
         results::detect_verdict("未通过\n后续通过测试"),
@@ -675,4 +676,552 @@ fn windows_globs_ignore_case_and_accept_backslashes() {
         "星云/中文.CONF",
         "中文.CONF"
     ));
+}
+
+#[test]
+fn rule_match_modes_priority_disabled_and_legacy_config() {
+    use crate::model::{Rule, RuleSet};
+    let legacy: Rule = serde_json::from_value(serde_json::json!({
+        "id": "legacy", "pattern": "*xxl*", "system": "other", "template_id": "tpl-generic"
+    }))
+    .unwrap();
+    assert_eq!(legacy.match_type, "glob");
+    let mut set = RuleSet {
+        id: "test".into(),
+        name: "test".into(),
+        builtin: false,
+        rules: vec![legacy],
+    };
+    for (mode, pattern, positive, negative) in [
+        (
+            "filename",
+            "XXL配置.xlsx",
+            "xxl配置.XLSX",
+            "old-XXL配置.xlsx",
+        ),
+        (
+            "keyword",
+            "XXL-JOB",
+            "系统-xxl-job说明.docx",
+            "系统说明.docx",
+        ),
+        ("extension", ".xlsx", "普通配置.XLSX", "配置.xlsx.txt"),
+        (
+            "glob",
+            "*xxl*.{xlsx,docx,txt}",
+            "xxl任务.txt",
+            "xxl任务.pdf",
+        ),
+    ] {
+        let rule = Rule {
+            id: "new".into(),
+            pattern: pattern.into(),
+            match_type: mode.into(),
+            system: "xxl".into(),
+            template_id: "tpl-xxl".into(),
+            enabled: true,
+        };
+        set.rules.insert(0, rule);
+        rules::validate(&set).unwrap();
+        assert_eq!(rules::resolve(&set, positive, positive).unwrap().0, "new");
+        assert_ne!(
+            rules::resolve(&set, negative, negative).map(|r| r.0),
+            Some("new".into())
+        );
+        set.rules[0].enabled = false;
+        assert_ne!(
+            rules::resolve(&set, positive, positive).map(|r| r.0),
+            Some("new".into())
+        );
+        set.rules.remove(0);
+    }
+    set.rules[0].pattern = "[".into();
+    assert!(rules::validate(&set).is_err());
+}
+
+#[test]
+fn scan_reports_real_totals_and_can_cancel_before_parsing() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["apollo-a.json", "apollo-b.json", "unmatched.txt"] {
+        std::fs::write(temp.path().join(name), "{\"timeout\":30}").unwrap();
+    }
+    let mut progress = scan::initial_progress("test".into());
+    let mut events = Vec::new();
+    let entries = scan::scan_directory_with_progress(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut progress,
+        &mut |p| {
+            events.push(p.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.iter().filter(|e| e.matched).count(), 2);
+    assert!(events
+        .iter()
+        .any(|p| p.phase == "discover" && p.total.is_none()));
+    let last = events.last().unwrap();
+    assert_eq!(last.phase, "done");
+    assert_eq!(last.total, Some(3));
+    assert_eq!(last.processed, 3);
+    assert_eq!(last.matched, 2);
+    let result = scan::scan_directory_with_progress(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut scan::initial_progress("cancel".into()),
+        &mut |p| {
+            if p.phase == "parse" {
+                Err("扫描已取消".into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+    assert_eq!(result.unwrap_err(), "扫描已取消");
+}
+
+#[test]
+fn scan_enforces_total_limit_even_when_no_rules_match() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("a.txt"), "a").unwrap();
+    std::fs::write(temp.path().join("b.txt"), "b").unwrap();
+    let mut options = opts();
+    options.max_files = 1;
+    options.matched_only = true;
+    let result = scan::scan_directory(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &options,
+    );
+    assert!(result.unwrap_err().contains("超过上限"));
+}
+
+#[test]
+fn zip_progress_and_cancel_during_extraction() {
+    let temp = tempfile::tempdir().unwrap();
+    let zip_path = temp.path().join("release.zip");
+    let file = std::fs::File::create(&zip_path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    zip.start_file("apollo.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    use std::io::Write;
+    zip.write_all(b"{\"retry\":3}").unwrap();
+    zip.finish().unwrap();
+    let mut progress = scan::initial_progress("zip".into());
+    let mut saw_extract = false;
+    let result = scan::scan_uploads_with_progress(
+        &[zip_path.to_string_lossy().into_owned()],
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut progress,
+        &mut |p| {
+            if p.phase == "extract" {
+                saw_extract = true;
+                return Err("扫描已取消".into());
+            }
+            Ok(())
+        },
+    );
+    assert!(saw_extract);
+    assert_eq!(result.unwrap_err(), "扫描已取消");
+    assert!(!temp.path().join("work").exists());
+}
+
+#[test]
+fn legacy_doc_chinese_tables_repetition_and_chunks() {
+    let bytes = include_bytes!("../tests/fixtures/legacy-word.doc");
+    let text = parse::legacy_doc_text(bytes).unwrap();
+    assert!(
+        text.contains("执行器：订单同步；超时 30 秒；失败重试 3 次。"),
+        "{text}"
+    );
+    assert!(text.contains("订单同步 | orderSyncJob | 3"), "{text}");
+    assert!(text.contains("库存同步 | stockSyncJob | 2"), "{text}");
+    assert_eq!(text.matches("重复检查").count(), 2);
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("XXL操作手册.DOC");
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(parse::kind_for("DOC"), "word");
+    let parsed = parse::parse_file(&path, "word", 40, 30).unwrap();
+    assert_eq!(parsed.text, text);
+    assert!(parsed.chunks.len() > 1);
+}
+
+#[test]
+fn legacy_doc_rejects_fake_and_truncated_files() {
+    assert!(parse::legacy_doc_text(b"fake doc")
+        .unwrap_err()
+        .contains("不是"));
+    let bytes = include_bytes!("../tests/fixtures/legacy-word.doc");
+    assert!(parse::legacy_doc_text(&bytes[..512])
+        .unwrap_err()
+        .contains("损坏"));
+}
+
+#[test]
+fn legacy_doc_rejects_encrypted_and_old_versions() {
+    use std::io::{Cursor, Seek, SeekFrom};
+    let original = include_bytes!("../tests/fixtures/legacy-word.doc");
+    for (offset, replacement, expected) in [(10, 0x0100u16, "已加密"), (2, 0x0065u16, "Word 6/95")]
+    {
+        let mut compound = cfb::CompoundFile::open(Cursor::new(original.to_vec())).unwrap();
+        {
+            let mut word = compound.open_stream("WordDocument").unwrap();
+            word.seek(SeekFrom::Start(offset)).unwrap();
+            word.write_all(&replacement.to_le_bytes()).unwrap();
+        }
+        let bytes = compound.into_inner().into_inner();
+        assert!(parse::legacy_doc_text(&bytes)
+            .unwrap_err()
+            .contains(expected));
+    }
+}
+
+#[test]
+fn legacy_doc_in_zip_routes_and_parses() {
+    let temp = tempfile::tempdir().unwrap();
+    let zip = temp.path().join("发布包.zip");
+    zip_fixture(
+        &zip,
+        &[(
+            "XXL操作手册.DOC",
+            include_bytes!("../tests/fixtures/legacy-word.doc"),
+        )],
+    );
+    let rs = rules::default_rule_sets().remove(0);
+    let entries = scan::scan_uploads(
+        &[zip.to_string_lossy().into_owned()],
+        &rs,
+        &temp.path().join("workspace"),
+        &opts(),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].parse_status, "ok");
+    assert_eq!(entries[0].system.as_deref(), Some("xxl"));
+    assert!(entries[0].preview.contains("orderSyncJob"));
+}
+
+#[test]
+fn module_migration_preserves_conflicting_rules_and_shared_templates() {
+    let mut config = config::AppConfig {
+        schema_version: 0,
+        output_format: "json".into(),
+        ..Default::default()
+    };
+    config.systems[1].default_template_id = "tpl-apollo".into();
+    config.rule_sets[0].rules[0].template_id = "tpl-generic".into();
+    let migrated = config.merged();
+    let rule = &migrated.rule_sets[0].rules[0];
+    assert_ne!(rule.system, "apollo");
+    assert!(migrated
+        .systems
+        .iter()
+        .find(|m| m.id == rule.system)
+        .unwrap()
+        .name
+        .contains("通用文档评审"));
+    assert_eq!(
+        migrated.module_template(&rule.system).unwrap().content,
+        rules::default_templates()
+            .into_iter()
+            .find(|t| t.id == "tpl-generic")
+            .unwrap()
+            .content
+    );
+    assert_eq!(
+        rule.template_id,
+        migrated.module_template(&rule.system).unwrap().id
+    );
+    let unique: std::collections::HashSet<_> = migrated
+        .systems
+        .iter()
+        .map(|m| &m.default_template_id)
+        .collect();
+    assert_eq!(unique.len(), migrated.systems.len());
+    assert!(migrated.templates.iter().all(|t| t.output_format == "json"));
+    let once = serde_json::to_value(&migrated).unwrap();
+    assert_eq!(once, serde_json::to_value(migrated.merged()).unwrap());
+}
+
+#[test]
+fn deleted_modules_and_templates_stay_deleted_after_reload() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut config = config::AppConfig::default();
+    config.systems.clear();
+    config.templates.clear();
+    config.rule_sets.clear();
+    config::save(&path, &config).unwrap();
+    let loaded = config::load(&path);
+    assert!(loaded.systems.is_empty());
+    assert!(loaded.templates.is_empty());
+    assert!(loaded.rule_sets.is_empty());
+}
+
+#[test]
+fn save_derives_rule_template_from_module_and_validates_references() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut config = config::AppConfig::default();
+    config.rule_sets[0].rules[0].template_id = "stale-template".into();
+    config::save(&path, &config).unwrap();
+    assert_eq!(
+        config::load(&path).rule_sets[0].rules[0].template_id,
+        "tpl-apollo"
+    );
+    config.rule_sets[0].rules[0].system = "removed-module".into();
+    assert!(config::save(&path, &config)
+        .unwrap_err()
+        .contains("评审模块不存在"));
+    config.rule_sets.clear();
+    config.systems[0].name = " ".into();
+    assert!(config::save(&path, &config).is_err());
+    config.systems[0].name = "Apollo".into();
+    config.templates[0].content.clear();
+    assert!(config::save(&path, &config).is_err());
+}
+
+fn module_review_request() -> crate::model::ReviewRequest {
+    serde_json::from_value(serde_json::json!({
+        "task_id": "test", "cfg": {"base_url":"http://localhost", "model":"mock"},
+        "files": [{"path":"apollo.txt", "abs_path":"/tmp/apollo.txt", "name":"apollo.txt", "kind":"text", "system":"apollo", "template_id":"stale", "template_content":"UNTRUSTED PROMPT"}]
+    })).unwrap()
+}
+
+#[test]
+fn review_uses_current_module_input_prompt_and_output_contract() {
+    let mut config = config::AppConfig::default();
+    let template = config
+        .templates
+        .iter_mut()
+        .find(|t| t.id == "tpl-apollo")
+        .unwrap();
+    template.input_instructions = "输入为变更前后配置，请对比差异".into();
+    template.output_instructions = "依据中列出所有差异项".into();
+    template.content = "检查新增端点".into();
+    template.output_format = "json".into();
+    let mut request = module_review_request();
+    config.prepare_review(&mut request).unwrap();
+    let file = &request.files[0];
+    assert_eq!(file.template_id, "tpl-apollo");
+    assert_eq!(file.output_format, "json");
+    let instruction = results::build_instruction(
+        &file.template_content,
+        &file.name,
+        None,
+        &file.output_format,
+    );
+    for expected in [
+        "输入为变更前后配置",
+        "依据中列出所有差异项",
+        "检查新增端点",
+        "只输出一个 JSON",
+    ] {
+        assert!(instruction.contains(expected), "missing {expected}");
+    }
+    assert!(!instruction.contains("UNTRUSTED PROMPT"));
+    config
+        .templates
+        .iter_mut()
+        .find(|t| t.id == "tpl-apollo")
+        .unwrap()
+        .content = "新的检查要求".into();
+    config.prepare_review(&mut request).unwrap();
+    assert!(request.files[0].template_content.contains("新的检查要求"));
+    config.systems.retain(|m| m.id != "apollo");
+    assert!(config.prepare_review(&mut request).is_err());
+}
+
+#[test]
+fn combined_review_rejects_mixed_module_contracts() {
+    let config = config::AppConfig::default();
+    let mut request = module_review_request();
+    request.granularity = "single".into();
+    let mut second = request.files[0].clone();
+    second.system = Some("xxl".into());
+    request.files.push(second);
+    assert!(config
+        .prepare_review(&mut request)
+        .unwrap_err()
+        .contains("同一个评审模块"));
+    request.files[1].system = Some("apollo".into());
+    config.prepare_review(&mut request).unwrap();
+}
+
+#[test]
+fn legacy_template_snapshot_deserializes_without_new_fields() {
+    let template: crate::model::Template = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "name":"旧规范", "content":"旧 Prompt", "builtin":false
+    }))
+    .unwrap();
+    assert_eq!(template.output_format, "standard");
+    assert!(template.input_instructions.is_empty());
+    assert!(template.output_instructions.is_empty());
+}
+
+#[test]
+fn migration_is_saved_once_and_subsequent_edits_remain_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut old = config::AppConfig {
+        schema_version: 0,
+        ..Default::default()
+    };
+    old.rule_sets[0].rules[0].template_id = "tpl-generic".into();
+    std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let mut migrated = config::load(&path);
+    let first = serde_json::to_value(&migrated).unwrap();
+    assert_eq!(first, serde_json::to_value(config::load(&path)).unwrap());
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["schema_version"], config::CURRENT_SCHEMA_VERSION);
+    migrated.systems.retain(|m| m.id != "apollo");
+    migrated.templates.retain(|t| t.id != "tpl-apollo");
+    config::save(&path, &migrated).unwrap();
+    assert!(!config::load(&path).systems.iter().any(|m| m.id == "apollo"));
+}
+
+#[tokio::test]
+async fn http_errors_include_safe_provider_details_and_own_user_agent() {
+    for streaming in [false, true] {
+        let body = serde_json::to_vec(&serde_json::json!({"error":{"type":"MissingSessionID","message":"missing conversation header; key=mock-key"}})).unwrap();
+        let (url, rx) = mock(vec![body], "application/json", 400, 0);
+        let config = cfg(url);
+        let error = if streaming {
+            gateway::chat_stream(&config, "test", None, |_| {})
+                .await
+                .unwrap_err()
+        } else {
+            gateway::chat(&config, "test").await.unwrap_err()
+        };
+        assert!(error.contains("HTTP 400"));
+        assert!(error.contains("MissingSessionID"));
+        assert!(error.contains("missing conversation header"));
+        assert!(!error.contains("mock-key"));
+        let received = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(received.to_lowercase().contains(&format!(
+            "user-agent: config-reviewer/{}",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(!received.to_lowercase().contains("x-opencode-session"));
+    }
+}
+
+#[test]
+fn citation_only_basis_is_valid_standard_review_and_keeps_business_ids() {
+    let raw = "阻断\n【依据】\n- 引用：Sheet!7 | 9003 调度器缺少回滚方案\n【风险】\n9003 任务可能重复执行\n9003.5 参数缺少说明\n【整改项】\n1. 为任务 9003 补齐回滚方案\n2、 明确重试次数";
+    let result = results::parse_result("任务表.xlsx", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(result.verdict, "阻断");
+    assert_eq!(
+        result.basis,
+        vec!["引用：Sheet!7 | 9003 调度器缺少回滚方案"]
+    );
+    assert_eq!(
+        result.risks,
+        vec!["9003 任务可能重复执行", "9003.5 参数缺少说明"]
+    );
+    assert_eq!(
+        result.remediations,
+        vec!["为任务 9003 补齐回滚方案", "明确重试次数"]
+    );
+    assert_eq!(result.citations.len(), 1);
+    assert_eq!(result.citations[0].locator, "Sheet!7");
+    assert_eq!(result.citations[0].snippet, "9003 调度器缺少回滚方案");
+}
+
+#[test]
+fn numbered_citations_remain_available_as_basis_and_structured_citations() {
+    let raw = "有条件通过\n【依据】\n1. 引用：第 3 行 | 1234 参数已配置\n【风险】\n1) 缺少确认记录\n【整改项】\n1. 补充确认记录";
+    let result = results::parse_result("配置.txt", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.basis, vec!["引用：第 3 行 | 1234 参数已配置"]);
+    assert_eq!(result.citations.len(), 1);
+    assert_eq!(result.citations[0].snippet, "1234 参数已配置");
+}
+
+#[test]
+fn inline_task_prefixed_citations_extract_separately_without_swallowing_commentary() {
+    let raw = "阻断\n【依据】\n- 9003：引用：XXL-JOB配置.xlsx / Sheet: 发布约定 第11行 | `必填 bizDate、batchNo、dryRun；当前接口无幂等键`；引用：XXL-JOB配置.xlsx / Sheet: 调度运行 第8行 | `9003 | CRON | 0 0 3 * * ?`；六段 Cron 逐位复核。\n【风险】\n- 9004：引用：任务基础第9行 | 报警邮件为空；需确认替代告警。\n【整改项】\n- 9003：补齐 batchNo。";
+    let result = results::parse_result("配置.xlsx", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert!(result.basis[0].starts_with("9003：引用："));
+    assert_eq!(result.citations.len(), 3);
+    assert_eq!(
+        result.citations[0].locator,
+        "XXL-JOB配置.xlsx / Sheet: 发布约定 第11行"
+    );
+    assert_eq!(
+        result.citations[0].snippet,
+        "必填 bizDate、batchNo、dryRun；当前接口无幂等键"
+    );
+    assert_eq!(
+        result.citations[1].locator,
+        "XXL-JOB配置.xlsx / Sheet: 调度运行 第8行"
+    );
+    assert_eq!(result.citations[1].snippet, "9003 | CRON | 0 0 3 * * ?");
+    assert_eq!(result.citations[2].snippet, "报警邮件为空");
+}
+
+#[test]
+fn xls_inline_citations_keep_table_cells_and_skip_shorthand_without_locator() {
+    let raw = "阻断\n【依据】\n- 9006 支付异常订单补偿：依据：引用：发布约定第14行 | `必填 bizDate、dryRun；未读取分片序号`；同引用：`P95 80 秒；两台实例部署相同 Handler`；引用：高级配置第11行 | `SHARDING_BROADCAST（分片广播） | 超时 180 | 失败重试次数 2`；单机串行不能防止跨机重复。\n【风险】\n- 引用：发布约定第14行 | `必填 bizDate、dryRun；未读取分片序号`。\n【整改项】\n- 增加幂等保护。";
+    let result = results::parse_result("配置.xls", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.citations.len(), 2);
+    assert_eq!(result.citations[0].locator, "发布约定第14行");
+    assert_eq!(
+        result.citations[0].snippet,
+        "必填 bizDate、dryRun；未读取分片序号"
+    );
+    assert_eq!(result.citations[1].locator, "高级配置第11行");
+    assert_eq!(
+        result.citations[1].snippet,
+        "SHARDING_BROADCAST（分片广播） | 超时 180 | 失败重试次数 2"
+    );
+}
+
+#[test]
+fn chinese_quoted_citations_preserve_semicolons_and_following_implicit_sheet_locators() {
+    let raw = "阻断\n【依据】\n9006：引用：Sheet: 发布约定 行14 | “必填 bizDate、dryRun；每次查询当天全部待补偿订单；未读取分片序号；外部接口无幂等键。”；Sheet: 调度运行 行11 | “0 0/15 * * * ? | paymentCompensateJob”；Sheet: 高级配置 行11 | “SHARDING_BROADCAST | SERIAL_EXECUTION | 180 | 2”。两台会全量处理。\n【风险】\n9006：引用：Sheet: 发布约定 行14 | “未读取分片序号；外部接口无幂等键”；Sheet: 高级配置 行11 | “SHARDING_BROADCAST | SERIAL_EXECUTION | 180 | 2”。\n【整改项】\n补充幂等。";
+    let result = results::parse_result("配置.xlsx", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.citations.len(), 4);
+    assert_eq!(
+        result.citations[0].snippet,
+        "必填 bizDate、dryRun；每次查询当天全部待补偿订单；未读取分片序号；外部接口无幂等键。"
+    );
+    assert_eq!(result.citations[1].locator, "Sheet: 调度运行 行11");
+    assert_eq!(
+        result.citations[1].snippet,
+        "0 0/15 * * * ? | paymentCompensateJob"
+    );
+    assert_eq!(result.citations[2].locator, "Sheet: 高级配置 行11");
+    assert_eq!(
+        result.citations[2].snippet,
+        "SHARDING_BROADCAST | SERIAL_EXECUTION | 180 | 2"
+    );
+    assert!(result.basis[0].starts_with("9006：引用："));
+}
+
+#[test]
+fn bang_row_locators_are_extracted_without_repeated_marker_but_narrative_is_not() {
+    let raw = "阻断\n【依据】\n任务ID 9003：引用：调度运行!第8行 | “9003 | CRON | 0 0 3 * * ?”；发布约定!第11行 | “必填 bizDate、batchNo、dryRun；当前接口无幂等键”；高级配置!第8行 | “9003 | ROUND | 300 | 2”；不要把叙述当定位 | 这不是引用。\n【风险】\n重复发放。\n【整改项】\n补充参数。";
+    let result = results::parse_result("配置.xls", None, "tpl", 1, 0, raw, "standard");
+    assert!(result.error.is_none());
+    assert_eq!(result.citations.len(), 3);
+    assert_eq!(result.citations[1].locator, "发布约定!第11行");
+    assert_eq!(
+        result.citations[1].snippet,
+        "必填 bizDate、batchNo、dryRun；当前接口无幂等键"
+    );
+    assert_eq!(result.citations[2].locator, "高级配置!第8行");
+    assert_eq!(result.citations[2].snippet, "9003 | ROUND | 300 | 2");
 }

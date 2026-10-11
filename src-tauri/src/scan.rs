@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
@@ -18,20 +18,72 @@ pub struct ScanOptions {
     pub max_files: usize,
 }
 
-/// 扫描本地目录（普通文件原地读取，ZIP 解压到工作区后再扫描）。
+/// 发现阶段尚不知道总数，解析阶段按实际文件数报告进度。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScanProgress {
+    pub task_id: String,
+    pub phase: String,
+    pub discovered: usize,
+    pub processed: usize,
+    pub total: Option<usize>,
+    pub matched: usize,
+    pub current: String,
+}
+
+pub type Observer<'a> = dyn FnMut(&ScanProgress) -> Result<(), String> + 'a;
+
+pub fn initial_progress(task_id: String) -> ScanProgress {
+    ScanProgress {
+        task_id,
+        phase: "discover".into(),
+        discovered: 0,
+        processed: 0,
+        total: None,
+        matched: 0,
+        current: String::new(),
+    }
+}
+
+#[cfg(test)]
 pub fn scan_directory(
+    dir: &Path,
+    rules: &RuleSet,
+    workspace: &Path,
+    opts: &ScanOptions,
+) -> Result<Vec<ScanEntry>, String> {
+    scan_directory_with_progress(
+        dir,
+        rules,
+        workspace,
+        opts,
+        &mut initial_progress(String::new()),
+        &mut |_| Ok(()),
+    )
+}
+
+pub fn scan_directory_with_progress(
     dir: &Path,
     rule_set: &RuleSet,
     workspace: &Path,
     opts: &ScanOptions,
+    progress: &mut ScanProgress,
+    observer: &mut Observer<'_>,
 ) -> Result<Vec<ScanEntry>, String> {
     if !dir.is_dir() {
         return Err(format!("目录不存在：{}", dir.display()));
     }
     let max_depth = if opts.recursive { usize::MAX } else { 1 };
-    let mut entries = Vec::new();
-    let mut zips: Vec<PathBuf> = Vec::new();
-    for item in WalkDir::new(dir).max_depth(max_depth).into_iter() {
+    let mut candidates = Vec::new();
+    // 工作区可能位于用户选择的目录内，不能扫描自己的解压输出。
+    let workspace_root = workspace.parent().unwrap_or(workspace);
+    for item in WalkDir::new(dir)
+        .max_depth(max_depth)
+        .into_iter()
+        .filter_entry(|e| {
+            e.path() != workspace && (workspace_root == dir || e.path() != workspace_root)
+        })
+    {
+        observer(progress)?;
         let item = item.map_err(|e| format!("目录读取失败，扫描未完成：{e}"))?;
         if !item.file_type().is_file() {
             continue;
@@ -42,83 +94,184 @@ pub fn scan_directory(
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        if kind_for(ext_of(path)) == "zip" {
-            zips.push(path.to_path_buf());
-            continue;
-        }
-        if let Some(entry) = build_entry(path, &rel, rule_set, opts) {
-            entries.push(entry);
-        }
+        discover(
+            path,
+            &rel,
+            workspace,
+            opts,
+            &mut candidates,
+            progress,
+            observer,
+        )?;
     }
-    for (index, zip_path) in zips.into_iter().enumerate() {
-        let stem = zip_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "pkg".into());
-        let namespace = format!("{}-{stem}", index + 1);
-        let extracted = extract_zip(&zip_path, &workspace.join(&namespace), opts)?;
-        for (abs, rel) in extracted {
-            if let Some(entry) = build_entry(&abs, &rel, rule_set, opts) {
-                let mut entry = entry;
-                entry.path = format!("{namespace}/{}", entry.path);
-                entries.push(entry);
-            }
-        }
-    }
-    Ok(entries)
+    parse_candidates(candidates, rule_set, opts, progress, observer)
 }
 
-/// 扫描上传路径：ZIP 解压到工作区，普通文件登记为条目。
+#[cfg(test)]
 pub fn scan_uploads(
+    paths: &[String],
+    rules: &RuleSet,
+    workspace: &Path,
+    opts: &ScanOptions,
+) -> Result<Vec<ScanEntry>, String> {
+    scan_uploads_with_progress(
+        paths,
+        rules,
+        workspace,
+        opts,
+        &mut initial_progress(String::new()),
+        &mut |_| Ok(()),
+    )
+}
+
+pub fn scan_uploads_with_progress(
     paths: &[String],
     rule_set: &RuleSet,
     workspace: &Path,
     opts: &ScanOptions,
+    progress: &mut ScanProgress,
+    observer: &mut Observer<'_>,
 ) -> Result<Vec<ScanEntry>, String> {
-    let mut entries = Vec::new();
+    let mut candidates = Vec::new();
     for (index, raw) in paths.iter().enumerate() {
+        observer(progress)?;
         let path = PathBuf::from(raw);
         if !path.is_file() {
             return Err(format!("文件不存在或不可读取：{}", path.display()));
         }
-        if kind_for(ext_of(&path)) == "zip" {
-            let stem = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "pkg".into());
-            let namespace = format!("{}-{stem}", index + 1);
-            let extracted = extract_zip(&path, &workspace.join(&namespace), opts)?;
-            for (abs, rel) in extracted {
-                if let Some(entry) = build_entry(&abs, &rel, rule_set, opts) {
-                    let mut entry = entry;
-                    entry.path = format!("{namespace}/{}", entry.path);
-                    entries.push(entry);
-                }
-            }
-        } else if let Some(entry) = build_entry(
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let start = candidates.len();
+        discover(
             &path,
-            &path.file_name().unwrap_or_default().to_string_lossy(),
-            rule_set,
+            &name,
+            workspace,
             opts,
-        ) {
-            let mut entry = entry;
-            if entries.iter().any(|existing| existing.path == entry.path) {
-                entry.path = format!("{}/{}", index + 1, entry.path);
+            &mut candidates,
+            progress,
+            observer,
+        )?;
+        if kind_for(ext_of(&path)) != "zip"
+            && candidates[..start]
+                .iter()
+                .any(|c: &Candidate| c.display == name)
+        {
+            candidates[start].display = format!("{}/{name}", index + 1);
+        }
+    }
+    parse_candidates(candidates, rule_set, opts, progress, observer)
+}
+
+struct Candidate {
+    abs: PathBuf,
+    rel: String,
+    display: String,
+}
+
+fn discover(
+    path: &Path,
+    rel: &str,
+    workspace: &Path,
+    opts: &ScanOptions,
+    candidates: &mut Vec<Candidate>,
+    progress: &mut ScanProgress,
+    observer: &mut Observer<'_>,
+) -> Result<(), String> {
+    progress.phase = "discover".into();
+    progress.current = rel.into();
+    observer(progress)?;
+    if kind_for(ext_of(path)) == "zip" {
+        let namespace = format!(
+            "{}-{}",
+            uuid::Uuid::new_v4(),
+            path.file_stem().unwrap_or_default().to_string_lossy()
+        );
+        progress.phase = "extract".into();
+        let base_count = candidates.len();
+        let remaining = ScanOptions {
+            max_files: opts.max_files.saturating_sub(base_count),
+            ..*opts
+        };
+        // 单包和所有来源共用文件数量上限。
+        let extracted = extract_zip_with_progress(
+            path,
+            &workspace.join(&namespace),
+            &remaining,
+            &mut |name, count| {
+                progress.current = format!("{rel} / {name}");
+                progress.discovered = base_count + count;
+                observer(progress)
+            },
+        )?;
+        for (abs, rel) in extracted {
+            candidates.push(Candidate {
+                display: format!("{namespace}/{rel}"),
+                abs,
+                rel,
+            });
+        }
+    } else {
+        if candidates.len() >= opts.max_files {
+            return Err(format!("文件数超过上限 {}", opts.max_files));
+        }
+        candidates.push(Candidate {
+            abs: path.to_path_buf(),
+            rel: rel.into(),
+            display: rel.into(),
+        });
+    }
+    progress.discovered = candidates.len();
+    observer(progress)
+}
+
+fn parse_candidates(
+    candidates: Vec<Candidate>,
+    rule_set: &RuleSet,
+    opts: &ScanOptions,
+    progress: &mut ScanProgress,
+    observer: &mut Observer<'_>,
+) -> Result<Vec<ScanEntry>, String> {
+    progress.phase = "parse".into();
+    progress.total = Some(candidates.len());
+    let mut entries = Vec::new();
+    observer(progress)?;
+    for candidate in candidates {
+        progress.current = candidate.display.clone();
+        observer(progress)?;
+        if let Some(mut entry) = build_entry(&candidate.abs, &candidate.rel, rule_set, opts) {
+            entry.path = candidate.display;
+            if entry.matched {
+                progress.matched += 1;
             }
             entries.push(entry);
         }
-        if entries.len() > opts.max_files {
-            return Err(format!("文件数超过上限 {}", opts.max_files));
-        }
+        progress.processed += 1;
+        observer(progress)?;
     }
+    progress.phase = "done".into();
+    progress.current.clear();
+    observer(progress)?;
     Ok(entries)
 }
 
 /// 解压 ZIP，返回 (绝对路径, 包内相对路径)。越界、重复或超限时拒绝整个包。
+#[cfg(test)]
 pub fn extract_zip(
     zip_path: &Path,
     dest: &Path,
     opts: &ScanOptions,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    extract_zip_with_progress(zip_path, dest, opts, &mut |_, _| Ok(()))
+}
+
+fn extract_zip_with_progress(
+    zip_path: &Path,
+    dest: &Path,
+    opts: &ScanOptions,
+    observer: &mut dyn FnMut(&str, usize) -> Result<(), String>,
 ) -> Result<Vec<(PathBuf, String)>, String> {
     let file = File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -130,6 +283,7 @@ pub fn extract_zip(
         .saturating_mul(4)
         .min(2 * 1024 * 1024 * 1024);
     for i in 0..archive.len() {
+        observer("", result.len())?;
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let rel = entry
             .enclosed_name()
@@ -165,7 +319,15 @@ pub fn extract_zip(
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut out = File::create(&out_path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            observer(&name, result.len())?;
+            let read = entry.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                break;
+            }
+            out.write_all(&buffer[..read]).map_err(|e| e.to_string())?;
+        }
         out.flush().map_err(|e| e.to_string())?;
         result.push((out_path, rel.to_string_lossy().replace('\\', "/")));
     }

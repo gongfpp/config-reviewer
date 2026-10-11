@@ -4,12 +4,12 @@
 
 ## 交付与安装
 
-交付物为 `ConfigReviewer-0.1.2-windows-x64-offline.zip`，包含 NSIS 安装 EXE、此说明、环境检查脚本、源码版本记录 `build-info.json` 和 SHA256 清单。EXE 内置 Microsoft WebView2 **完整离线安装器**，不是仍需联网的 bootstrapper。主程序静态链接 MSVC CRT，不要求另装 Node、Rust、Office、SQLite 或 VC++ Redistributable。
+交付物为 `ConfigReviewer-0.1.4-windows-x64-offline.zip`，包含 NSIS 安装 EXE、独立主程序 `config-reviewer.exe`、此说明、环境检查脚本、源码版本记录 `build-info.json` 和 SHA256 清单。安装 EXE 内置 Microsoft WebView2 **完整离线安装器**，不是仍需联网的 bootstrapper。主程序静态链接 MSVC CRT，不要求另装 Node、Rust、Office、SQLite 或 VC++ Redistributable。
 
 1. 在允许联网的电脑下载完整 ZIP，按内网介质管理流程导入。
-2. 使用 `Get-FileHash .\ConfigReviewer_0.1.2_x64-setup.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 核对文件；实际 EXE 名以压缩包内容为准。
-3. 运行 EXE。默认安装到当前用户目录；WebView2 安装需服从单位权限策略。杀毒/AppLocker/WDAC 阻止 EXE 或 WebView2 时需由管理员放行。本项目没有配置机构代码签名。
-4. 启动「配置评审台」，在「模型与规则」填写网关 Base URL（通常含 `/v1`）、模型标识和 API Key，保存后测试连接。
+2. 使用 `Get-FileHash .\ConfigReviewer_0.1.4_x64-setup.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 核对文件；实际 EXE 名以压缩包内容为准。
+3. 首次使用运行 `*-setup.exe`。已装好 WebView2 的电脑也可直接运行独立 `config-reviewer.exe`；它本身不包含 WebView2 安装器。默认安装到当前用户目录；WebView2 安装需服从单位权限策略。杀毒/AppLocker/WDAC 阻止 EXE 或 WebView2 时需由管理员放行。本项目没有配置机构代码签名。
+4. 启动「配置评审台」，在「模型与运行」填写网关 Base URL（通常含 `/v1`）、模型标识和 API Key，保存后测试连接。
 5. 默认鉴权为 `Authorization: Bearer <Key>`。要求 `api-key` 或 `X-API-Key` 的网关可填写「API Key 请求头」。默认直连，代理留空，不继承系统外网代理；需要代理时显式填写。
 6. 启用「允许内网 HTTP」。默认使用流式响应；网关拒绝流式参数时关闭。测试连接使用相同响应模式。
 
@@ -28,7 +28,7 @@ API Key 保存到当前 Windows 用户凭据库；配置使用临时文件原子
 - ZIP：支持普通未加密 Stored/Deflate ZIP；不支持 RAR、7z、密码 ZIP，嵌套 ZIP 不递归解压。ZIP 中文文件名要求标准 UTF-8 或 ZIP Unicode 扩展；GBK 旧 ZIP 若名称乱码，应先由单位工具解压再扫描目录。同名包隔离，路径越界、大小写冲突及不兼容 Windows 的路径拒绝导入。
 - JSON：合法 JSON 格式化，解析失败保留原文作为文本评审。
 - Excel：识别 `.xlsx/.xls/.xlsm/.xlsb`；本轮样例实测 `.xlsx`。按 Sheet 提取缓存单元格值，不执行公式或宏，不渲染合并单元格、图表、图片。
-- Word：仅 `.docx`，读取正文段落、表格和转义字符；不读取图片/OCR、页眉页脚、批注或旧版 `.doc`。
+- Word：`.docx` 和 Word 97–2003 二进制 `.doc`，读取正文段落与表格；不读取图片/OCR、页眉页脚、批注或嵌入对象，不执行宏。加密 DOC、Word 6/95、使用 DOC 后缀的 RTF/HTML 需先另存为 DOCX。原有规则不会自动修改；需要时添加 `doc` 后缀规则或文件名关键字规则。
 - 文本：UTF-8（含 BOM）、GB18030、带 BOM 的 UTF-16 LE/BE。无 BOM UTF-16 不自动猜测。
 - PDF、图片、JAR/class 等二进制不解析。规则忽略大小写，接受 `/` 和 `\` 路径分隔符；规则未命中文件默认跳过，预置命名规则需结合实际发布包调整。
 - 默认 800 文件、单文件 1228 MB；这是可配置的输入限制，不是大文件性能保证。ZIP 单包解压总量限单文件上限的 4 倍且不超过 2 GB；大文件仍需先以真实样例确认内存和耗时。
@@ -49,3 +49,7 @@ Windows PowerShell 5.1 可运行 `powershell -ExecutionPolicy Bypass -File .\che
 本机 macOS 回归测试与 Windows CI 编译/凭据测试/安装器冒烟分别提供证据，不等同于目标电脑或真实内网网关验收。执行结果以本轮 [兼容性检查记录](compatibility-audit.md) 为准。
 
 参考：[Tauri 离线 WebView2 安装](https://v2.tauri.app/distribute/windows-installer/#offline-installer)、[Microsoft WebView2 分发](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。
+
+## 0.1.4 评审模块设置
+
+文件匹配、输入说明、评审要求、输出格式和补充要求统一在「评审模块」中配置并保存。「模型与运行」只配置网关、凭据和容量。文件清单不再单独选模板；多个模块按各自规范逐文件评审，同模块可合并评审。旧配置自动迁移并保留备份；分歧模板会保留为独立模块，旧版多个匹配方案仍可选择。

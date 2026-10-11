@@ -2,6 +2,14 @@ use serde_json::Value;
 
 use crate::model::{Citation, FileResult};
 
+/// 模块中输入、评审和输出约定共同形成规范；输出格式由同一模块提供。
+pub fn module_prompt(template: &crate::model::Template) -> String {
+    format!("输入说明：\n{}\n\n评审要求：\n{}\n\n输出补充要求：\n{}\n输出补充要求必须遵循所选输出格式的结构，不能删除必需字段或结论。",
+        if template.input_instructions.trim().is_empty() { "读取所附文件正文；缺失信息标为待确认，不得臆测。" } else { template.input_instructions.trim() },
+        template.content.trim(),
+        if template.output_instructions.trim().is_empty() { "按所选输出格式输出结论、依据、风险和整改建议。" } else { template.output_instructions.trim() })
+}
+
 /// 按输出格式给出结论组织方式的说明。
 fn format_spec(output_format: &str) -> &'static str {
     match output_format {
@@ -15,7 +23,7 @@ fn format_spec(output_format: &str) -> &'static str {
             "请只输出一个 JSON 对象，不要包裹 Markdown 代码块、不要输出多余文字。字段结构：{\"verdict\":\"通过|有条件通过|阻断\",\"basis\":[\"\"],\"risks\":[\"\"],\"remediations\":[\"\"],\"citations\":[{\"locator\":\"\",\"snippet\":\"\"}]}。\n"
         }
         _ => {
-            "标准结论必须以“通过”“有条件通过”或“阻断”之一开头，并分别给出【依据】【风险】【整改项】。\n"
+            "标准结论必须以“通过”“有条件通过”或“阻断”之一开头。整份文件只给一个总评结论和一组【依据】【风险】【整改项】，不得按任务重复这些标题。存在多个任务或配置对象时，在各条依据、风险和整改项中注明对应任务 ID 或对象标识。\n"
         }
     }
 }
@@ -33,6 +41,7 @@ pub fn build_instruction(
     instruction.push_str(
         "每条依据与风险尽量给出原文引用，格式：引用：定位 | 原文片段；无法引用时写“待确认”。\n",
     );
+    instruction.push_str("整改建议必须保持资料已声明的业务目标。不同 Handler 或处理器的能力不得互相推定，资料未证明的能力先标为待确认。存在多项独立风险时，每个备选方案都应说明尚未解决的风险，不得把局部修复描述为消除全部风险。\n");
     instruction.push_str("只输出评审结论本体，不要复述本说明。\n\n");
     instruction.push_str("评审要求：\n");
     instruction.push_str(template_content.trim());
@@ -258,12 +267,8 @@ fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
                 break;
             }
         }
-        let item = item
-            .trim()
-            .trim_start_matches(['-', '*', '•', ' '])
-            .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '、')
-            .trim();
-        if item.is_empty() || item.starts_with("引用") {
+        let item = strip_numbered_list_prefix(item.trim().trim_start_matches(['-', '*', '•', ' ']));
+        if item.is_empty() {
             continue;
         }
         match section {
@@ -276,28 +281,114 @@ fn split_sections(raw: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     (basis, risks, fixes)
 }
 
-/// 解析「引用：定位 | 片段」形式的结构化引用。
+/// 只移除数字 + 列表标点 + 空白；裸数字开头的任务 ID 和参数值必须保留。
+fn strip_numbered_list_prefix(text: &str) -> &str {
+    let digit_end = text.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_end == 0 {
+        return text.trim();
+    }
+    let suffix = &text[digit_end..];
+    for marker in [".", ")", "、"] {
+        if let Some(rest) = suffix.strip_prefix(marker) {
+            if rest.starts_with(char::is_whitespace) {
+                return rest.trim();
+            }
+        }
+    }
+    text.trim()
+}
+
+/// 按引号外分隔符切开同行引用，表格内容和中文引号内的分号保持完整。
+fn citation_segments(line: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut quote_end = None;
+    for (index, ch) in line.char_indices() {
+        if let Some(end) = quote_end {
+            if ch == end {
+                quote_end = None;
+            }
+            continue;
+        }
+        quote_end = match ch {
+            '`' => Some('`'),
+            '“' => Some('”'),
+            '「' => Some('」'),
+            '『' => Some('』'),
+            _ => None,
+        };
+        if quote_end.is_some() {
+            continue;
+        }
+        if matches!(ch, '；' | ';') {
+            segments.push(&line[start..index]);
+            start = index + ch.len_utf8();
+        } else if (line[index..].starts_with("引用：") || line[index..].starts_with("引用:"))
+            && index > start
+            && line[start..index].contains('|')
+        {
+            segments.push(&line[start..index]);
+            start = index;
+        }
+    }
+    segments.push(&line[start..]);
+    segments
+}
+
+fn explicit_sheet_locator(locator: &str) -> bool {
+    locator.starts_with("Sheet:")
+        || locator.starts_with("Sheet：")
+        || locator.contains(" / Sheet:")
+        || (locator.contains('!') && locator.contains('第') && locator.ends_with('行'))
+}
+
+/// 支持短前缀及同行省略“引用”但有明确工作表定位的引用；正文保持原样。
 fn extract_citations(file: &str, raw: &str) -> Vec<Citation> {
     let mut citations = Vec::new();
     for line in raw.lines() {
-        let trimmed = line.trim().trim_start_matches(['>', '-', '*', ' ']);
-        let Some(rest) = trimmed.strip_prefix("引用") else {
-            continue;
-        };
-        let rest = rest.trim_start_matches(['：', ':']).trim();
-        if rest.is_empty() {
-            continue;
+        for segment in citation_segments(line) {
+            let segment = segment.trim();
+            let explicit = segment
+                .split_once("引用：")
+                .or_else(|| segment.split_once("引用:"));
+            let rest = explicit.map(|(_, rest)| rest).unwrap_or(segment);
+            let Some((locator, quoted)) = rest.split_once('|') else {
+                continue;
+            };
+            let locator = locator.trim();
+            if locator.is_empty()
+                || locator.chars().count() > 160
+                || (explicit.is_none() && !explicit_sheet_locator(locator))
+            {
+                continue;
+            }
+            let quoted = quoted.trim();
+            let quoted_pair = [('`', '`'), ('“', '”'), ('「', '」'), ('『', '』')]
+                .into_iter()
+                .find(|(open, _)| quoted.starts_with(*open));
+            let snippet = if let Some((open, close)) = quoted_pair {
+                let body = &quoted[open.len_utf8()..];
+                body.split_once(close).map(|(body, _)| body).unwrap_or(body)
+            } else {
+                quoted.split(['；', ';', '。']).next().unwrap_or("")
+            }
+            .trim();
+            if snippet.is_empty() {
+                continue;
+            }
+            let snippet: String = snippet.chars().take(120).collect();
+            if citations
+                .iter()
+                .any(|c: &Citation| c.locator == locator && c.snippet == snippet)
+            {
+                continue;
+            }
+            citations.push(Citation {
+                file: file.to_string(),
+                locator: locator.to_string(),
+                snippet,
+            });
         }
-        let (locator, snippet) = match rest.split_once('|') {
-            Some((l, s)) => (l.trim().to_string(), s.trim().to_string()),
-            None => (rest.to_string(), String::new()),
-        };
-        let snippet: String = snippet.chars().take(120).collect();
-        citations.push(Citation {
-            file: file.to_string(),
-            locator,
-            snippet,
-        });
     }
     citations
 }

@@ -1,6 +1,6 @@
 [package]
 name = "config-reviewer"
-version = "0.1.2"
+version = "0.1.4"
 description = "内网 Windows 桌面端配置评审台"
 authors = ["gongfpp"]
 edition = "2021"
@@ -37,8 +37,10 @@ tauri-plugin-dialog = "2.7.3"
 rust_xlsxwriter = "0.99.1"
 keyring = "4.2.0"
 quick-xml = "0.42.0"
+rwml = { version = "=0.1.4", default-features = false }
 
 [dev-dependencies]
+cfb = "0.10"
 tempfile = "3"
 
 

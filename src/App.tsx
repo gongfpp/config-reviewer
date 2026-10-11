@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
+import ReviewModules from "./ReviewModules";
 import * as api from "./api";
 import type {
   AppConfig,
@@ -15,20 +16,18 @@ import type {
   ReviewFileInput,
   ReviewProgress,
   ReviewSummary,
-  Rule,
   ScanEntry,
   ScanResult,
+  ScanProgress,
   SystemFileSummary,
-  SystemType,
   TaskDetail,
   TaskSummary,
-  Template,
 } from "./types";
 
 const GRANULARITY_LABEL: Record<Granularity, string> = {
   per_file: "逐文件",
-  per_file_system: "逐文件 + 按系统汇总",
-  single: "合并一次性",
+  per_file_system: "逐文件 + 按模块汇总",
+  single: "同模块合并评审",
 };
 
 const OUTPUT_FORMAT_LABEL: Record<OutputFormat, string> = {
@@ -97,11 +96,21 @@ export default function App() {
   const [matchedOnly, setMatchedOnly] = useState(true);
   const [textContent, setTextContent] = useState("");
   const [textSystem, setTextSystem] = useState("xxl");
-  const [textTemplate, setTextTemplate] = useState("tpl-xxl");
 
   const [step, setStep] = useState(1);
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanError, setScanError] = useState("");
+  const [scanCancelling, setScanCancelling] = useState(false);
+  const [scanPage, setScanPage] = useState(0);
+  const activeScanRef = useRef<string | null>(null);
+  const [reviewTotal, setReviewTotal] = useState(0);
+  const [reviewStage, setReviewStage] = useState("");
+  const [connectionTesting, setConnectionTesting] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [summarizing, setSummarizing] = useState<string | null>(null);
   const [preview, setPreview] = useState("选择文件可预览解析后的文本…");
 
   const [apiKey, setApiKey] = useState("");
@@ -118,7 +127,6 @@ export default function App() {
   const [history, setHistory] = useState<TaskSummary[]>([]);
   const [historyDetail, setHistoryDetail] = useState<TaskDetail | null>(null);
   const [historySearch, setHistorySearch] = useState("");
-  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [defaults, setDefaults] = useState<Defaults | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -137,7 +145,6 @@ export default function App() {
       .then(([cfg, key, defs]) => {
         setAppConfig(cfg);
         setActiveRuleSetId(cfg.rule_sets[0]?.id ?? "");
-        setEditingTemplate(cfg.templates[0] ?? null);
         setTextSystem(cfg.systems[1]?.id ?? cfg.systems[0]?.id ?? "other");
         setHasKey(key);
         setDefaults(defs);
@@ -191,6 +198,15 @@ export default function App() {
 
   const systems = appConfig?.systems ?? [];
   const templates = appConfig?.templates ?? [];
+  useEffect(() => {
+    if (!systems.some((s) => s.id === textSystem)) setTextSystem(systems[0]?.id ?? "");
+  }, [systems, textSystem]);
+  const changeRuleSet = (id: string) => {
+    setActiveRuleSetId(id);
+    setScan(null);
+    setStep(1);
+    setConfirmOpen(false);
+  };
   const ruleSet = useMemo(
     () => appConfig?.rule_sets.find((r) => r.id === activeRuleSetId) ?? appConfig?.rule_sets[0] ?? null,
     [appConfig, activeRuleSetId]
@@ -236,7 +252,20 @@ export default function App() {
     stream_enabled: appConfig?.stream_enabled ?? true,
   });
 
-  const updateConfig = (patch: Partial<AppConfig>) => setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
+  const [configDirty, setConfigDirty] = useState(false);
+  const updateConfig = (patch: Partial<AppConfig>) => {
+    setAppConfig((prev) => (prev ? { ...prev, ...patch } : prev));
+    setConfigDirty(true);
+    if (["base_url", "model", "api_key_header", "proxy_url", "allow_http"].some((key) => key in patch)) setConnectionResult(null);
+    if (patch.systems || patch.templates || patch.rule_sets) {
+      setScan(null);
+      setStep(1);
+    }
+  };
+  const moduleTemplate = (id: string | null) => templates.find((t) => t.id === systems.find((s) => s.id === id)?.default_template_id);
+  const mixedModuleMerge = appConfig?.granularity === "single" && new Set((scan?.entries ?? []).filter((e) => e.selected).map((e) => e.system)).size > 1;
+  const selectedFormats = Array.from(new Set((scan?.entries ?? []).filter((e) => e.selected).map((e) => OUTPUT_FORMAT_LABEL[moduleTemplate(e.system)?.output_format ?? "standard"])));
+
 
   const pickFiles = async () => {
     const selected = await open({ multiple: true, directory: false });
@@ -252,12 +281,33 @@ export default function App() {
   const doScan = async () => {
     if (running || scanning) return toast("请先等待当前扫描或评审完成。");
     if (!ruleSet || !appConfig) return;
+    const requestId = crypto.randomUUID();
+    activeScanRef.current = requestId;
     setScanning(true);
+    setScanCancelling(false);
+    setScanError("");
+    setScan(null);
+    setPreview("选择文件可预览解析后的文本…");
+    setDetail(null);
+    setResults([]);
+    setSummary(null);
+    setProgress({});
+    setSummaries({});
+    setReviewTotal(0);
+    setScanProgress({ task_id: requestId, phase: "discover", discovered: 0, processed: 0, total: null, matched: 0, current: "" });
+    let unlisten: (() => void) | undefined;
     try {
+      await api.saveSettings(appConfig);
+      setConfigDirty(false);
+      // 先完成订阅再调用后端，避免短任务漏掉首个事件。
+      unlisten = await listen<ScanProgress>("scan://progress", ({ payload }) => {
+        if (payload.task_id === activeScanRef.current) setScanProgress(payload);
+      });
       let result: ScanResult;
       if (source === "dir") {
         if (!dirPath.trim()) throw new Error("请填写目录路径");
         result = await api.scanDirectory({
+          requestId,
           path: dirPath,
           ruleSet,
           recursive,
@@ -268,6 +318,7 @@ export default function App() {
       } else if (source === "upload") {
         if (uploadPaths.length === 0) throw new Error("请先选择文件或 ZIP");
         result = await api.scanUploads({
+          requestId,
           paths: uploadPaths,
           ruleSet,
           matchedOnly,
@@ -277,9 +328,10 @@ export default function App() {
       } else {
         if (!textContent.trim()) throw new Error("请先粘贴内容");
         result = await api.scanText({
+          requestId,
           content: textContent,
           system: textSystem,
-          templateId: textTemplate,
+          templateId: moduleTemplate(textSystem)?.id ?? "",
           ruleSet,
           threshold: appConfig.chunk_threshold,
           chunkSize: appConfig.chunk_size,
@@ -287,13 +339,25 @@ export default function App() {
       }
       activeReviewRef.current = null;
       setScan(result);
+      setScanPage(0);
       setStep(2);
       toast(`扫描完成：命中 ${result.matched_files} / ${result.total_files} 个文件`);
     } catch (e) {
-      toast(String(e));
+      setScanError(String(e));
+      setStep(1);
     } finally {
+      unlisten?.();
+      activeScanRef.current = null;
       setScanning(false);
+      setScanCancelling(false);
     }
+  };
+
+  const cancelScan = async () => {
+    if (!activeScanRef.current) return;
+    setScanCancelling(true);
+    try { await api.cancelScan(activeScanRef.current); }
+    catch (e) { setScanCancelling(false); toast(String(e)); }
   };
 
   const updateEntry = (path: string, patch: Partial<ScanEntry>) => {
@@ -311,14 +375,23 @@ export default function App() {
       name: e.name,
       kind: e.kind,
       system: e.system,
-      template_id: e.template_id ?? "tpl-generic",
-      template_content: templates.find((t) => t.id === e.template_id)?.content ?? "",
+      template_id: moduleTemplate(e.system)?.id ?? "",
+      template_content: moduleTemplate(e.system)?.content ?? "",
+      output_format: moduleTemplate(e.system)?.output_format ?? "standard",
     }));
 
   const runRequest = async (files: ReviewFileInput[]) => {
     if (!scan || !appConfig) throw new Error("任务未就绪");
+    if (appConfig.granularity === "single" && new Set(files.map((f) => f.system)).size > 1) {
+      throw new Error("合并评审仅支持同一模块的文件；多个模块请使用逐文件评审。");
+    }
+    await api.saveSettings(appConfig);
+    setConfigDirty(false);
     analysisRevisionRef.current += 1;
     activeReviewRef.current = scan.task_id;
+    setProgress({});
+    setReviewTotal(appConfig.granularity === "single" ? 1 : files.length);
+    setReviewStage("正在评审…");
     return api.runReview({
       task_id: scan.task_id,
       workspace: scan.workspace,
@@ -338,8 +411,8 @@ export default function App() {
     await api.saveTask({
       sourceType: scan.source_type,
       sourceRef: scan.source_ref,
-      ruleSet,
-      templates,
+      ruleSet: scan.rule_set,
+      templates: scan.templates,
       summary,
     });
     refreshHistory();
@@ -348,6 +421,7 @@ export default function App() {
   const autoSummarize = async (list: FileResult[]) => {
     if (!appConfig || appConfig.granularity !== "per_file_system") return;
     const revision = analysisRevisionRef.current;
+    setReviewStage("正在生成模块汇总…");
     const ids = Array.from(new Set(list.map((r) => r.system ?? "other")));
     for (const sys of ids) {
       const items = list.filter((r) => (r.system ?? "other") === sys);
@@ -385,6 +459,7 @@ export default function App() {
       const result = await runRequest(files);
       setSummary(result);
       setResults(result.results);
+      setReviewStage("正在保存结果…");
       await persistTask(result);
       toast(result.cancelled ? "已取消，部分结果已保存" : "评审完成，已保存到本机历史");
       await autoSummarize(result.results);
@@ -408,6 +483,7 @@ export default function App() {
       return;
     }
     setRunning(true);
+    setSummary(null);
     try {
       const result = await runRequest(files);
       const merged = [...results];
@@ -439,7 +515,7 @@ export default function App() {
     list
       .map(
         (r) =>
-          `## ${r.file}\n\n- 系统：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
+          `## ${r.file}\n\n- 模块：${systemName(r.system)}\n- 结论：${r.verdict}\n\n### 依据\n${r.basis
             .map((b) => `- ${b}`)
             .join("\n")}\n\n### 风险\n${r.risks.map((b) => `- ${b}`).join("\n")}\n\n### 整改项\n${r.remediations
             .map((b) => `- ${b}`)
@@ -451,7 +527,7 @@ export default function App() {
     const rows = list
       .map(
         (r) =>
-          `<section><h2>${escapeHtml(r.file)}</h2><p class="meta">${systemName(r.system)} · <b class="${verdictClass(
+          `<section><h2>${escapeHtml(r.file)}</h2><p class="meta">${escapeHtml(systemName(r.system))} · <b class="${verdictClass(
             r.verdict
           )}">${r.verdict}</b>${r.chunks > 1 ? ` · ${r.chunks} 块合并` : ""}</p>
            <h3>依据</h3><ul>${r.basis.map((b) => `<li>${escapeHtml(b)}</li>`).join("") || "<li>无</li>"}</ul>
@@ -483,6 +559,7 @@ export default function App() {
   };
 
   const exportExcelOf = async (list: FileResult[], ruleByPath: Map<string, string>) => {
+    if (exporting) return;
     if (list.length === 0) return toast("没有可导出的结果");
     const path = await save({
       defaultPath: `review-${Date.now()}.xlsx`,
@@ -503,12 +580,13 @@ export default function App() {
         time: now,
       };
     });
+    setExporting(true);
     try {
       await api.exportXlsx(path, rows);
       toast("已导出 Excel");
     } catch (e) {
       toast(String(e));
-    }
+    } finally { setExporting(false); }
   };
 
   // 命中规则：rule_id → glob 模式，供导出展示。
@@ -526,20 +604,25 @@ export default function App() {
   const exportExcel = () => exportExcelOf(results, ruleMap);
 
   const download = async (filename: string, content: string, _type: string) => {
+    if (exporting) return;
     try {
       const extension = filename.split(".").pop() ?? "txt";
       const path = await save({ defaultPath: filename, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
       if (!path) return;
+      setExporting(true);
       await api.exportText(path, content);
       toast("报告已导出");
     } catch (e) { toast(String(e)); }
+    finally { setExporting(false); }
   };
 
   const summarize = async (system: string) => {
+    if (summarizing || running) return;
     const revision = analysisRevisionRef.current;
     const owner = activeReviewRef.current;
     const items = results.filter((r) => (r.system ?? "other") === system);
     if (items.length === 0) return;
+    setSummarizing(system);
     const files: SystemFileSummary[] = items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks }));
     try {
       const text = await api.summarizeSystem({
@@ -552,7 +635,7 @@ export default function App() {
       toast(`已生成 ${systemName(system)} 汇总`);
     } catch (e) {
       toast(String(e));
-    }
+    } finally { setSummarizing(null); }
   };
 
   const viewHistory = async (id: string) => {
@@ -580,114 +663,11 @@ export default function App() {
       return;
     }
     setDirPath(historyDetail.summary.source_ref);
-    const snap = historyDetail.rule_set;
-    if (snap) {
-      setAppConfig((prev) => {
-        if (!prev) return prev;
-        const exists = prev.rule_sets.some((r) => r.id === snap.id);
-        const rule_sets = exists ? prev.rule_sets.map((r) => (r.id === snap.id ? snap : r)) : [...prev.rule_sets, snap];
-        return { ...prev, rule_sets };
-      });
-      setActiveRuleSetId(snap.id);
-    }
     setSource("dir");
     setHistoryDetail(null);
     setView("task");
     setStep(1);
-    toast("已载入来源目录与规则集快照，请重新扫描。");
-  };
-
-  const saveTemplate = async () => {
-    if (!appConfig || !editingTemplate) return;
-    const next = appConfig.templates.map((t) => (t.id === editingTemplate.id ? editingTemplate : t));
-    const nextConfig = { ...appConfig, templates: next };
-    updateConfig({ templates: next });
-    try {
-      await api.saveSettings(nextConfig);
-      toast("模板已保存");
-    } catch (e) {
-      toast(String(e));
-    }
-  };
-
-  const newTemplate = () => {
-    if (!appConfig) return;
-    const tpl: Template = {
-      id: `tpl-custom-${Date.now()}`,
-      name: "新模板",
-      content: "在此填写该模板的评审要求…",
-      builtin: false,
-      overridden: false,
-    };
-    updateConfig({ templates: [...appConfig.templates, tpl] });
-    setEditingTemplate(tpl);
-  };
-
-  const deleteTemplate = (id: string) => {
-    if (!appConfig) return;
-    const next = appConfig.templates.filter((t) => t.id !== id);
-    updateConfig({ templates: next });
-    if (editingTemplate?.id === id) setEditingTemplate(next[0] ?? null);
-    void api.saveSettings({ ...appConfig, templates: next });
-  };
-
-  const restoreBuiltin = () => {
-    if (!editingTemplate) return;
-    const def = defaults?.templates.find((t) => t.id === editingTemplate.id);
-    if (!def) {
-      toast("自定义模板没有内置版本可恢复。");
-      return;
-    }
-    setEditingTemplate({ ...def, overridden: false });
-    toast("已载入内置内容，记得保存。");
-  };
-
-  const newSystem = () => {
-    if (!appConfig) return;
-    const sys: SystemType = {
-      id: `sys-custom-${Date.now()}`,
-      name: "新系统",
-      color: "#a89f8c",
-      default_template_id: templates[0]?.id ?? "tpl-generic",
-    };
-    updateConfig({ systems: [...appConfig.systems, sys] });
-  };
-
-  const updateSystem = (id: string, patch: Partial<SystemType>) => {
-    if (!appConfig) return;
-    updateConfig({ systems: appConfig.systems.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
-  };
-
-  const deleteSystem = (id: string) => {
-    if (!appConfig) return;
-    updateConfig({ systems: appConfig.systems.filter((s) => s.id !== id) });
-  };
-
-  const newRuleSet = () => {
-    if (!appConfig) return;
-    const id = `rs-custom-${Date.now()}`;
-    updateConfig({ rule_sets: [...appConfig.rule_sets, { id, name: "新规则集", builtin: false, rules: [] }] });
-    setActiveRuleSetId(id);
-  };
-
-  const deleteRuleSet = (id: string) => {
-    if (!appConfig) return;
-    if (appConfig.rule_sets.length <= 1) {
-      toast("至少保留一个规则集");
-      return;
-    }
-    const next = appConfig.rule_sets.filter((r) => r.id !== id);
-    updateConfig({ rule_sets: next });
-    if (activeRuleSetId === id) setActiveRuleSetId(next[0]?.id ?? "");
-    void api.saveSettings({ ...appConfig, rule_sets: next });
-  };
-
-  const updateRule = (ruleId: string, patch: Partial<Rule>) => {
-    if (!appConfig || !ruleSet) return;
-    const next = appConfig.rule_sets.map((rs) =>
-      rs.id === ruleSet.id ? { ...rs, rules: rs.rules.map((r) => (r.id === ruleId ? { ...r, ...patch } : r)) } : rs
-    );
-    updateConfig({ rule_sets: next });
+    toast("已载入来源目录，将使用当前评审模块重新扫描。");
   };
 
   const saveSettings = async () => {
@@ -698,6 +678,7 @@ export default function App() {
         setHasKey(true);
         setApiKey("");
       }
+      setConfigDirty(false);
       toast("设置已保存");
     } catch (e) {
       toast(String(e));
@@ -728,18 +709,18 @@ export default function App() {
           {history.length > 0 && <span className="badge">{history.length}</span>}
         </button>
         <button className={`nav-item ${view === "templates" ? "is-active" : ""}`} onClick={() => setView("templates")}>
-          <span className="ico">▤</span>模板管理
+          <span className="ico">▤</span>评审模块
         </button>
         <div className="nav-label">配置</div>
         <button className={`nav-item ${view === "settings" ? "is-active" : ""}`} onClick={() => setView("settings")}>
-          <span className="ico">⚙</span>模型与规则
+          <span className="ico">⚙</span>模型与运行
         </button>
         <div className="sidebar-foot">
           <div className="conn">
-            <span className="dot" />
+            <span className="dot" style={{ background: connectionResult ? (connectionResult.ok ? "var(--ok)" : "var(--danger)") : "var(--muted)" }} />
             <span>
-              <strong>{appConfig?.base_url ? "内网网关" : "未配置"}</strong>
-              {appConfig?.base_url ? (hasKey ? " · 已就绪" : " · 缺 Key") : " · 请设置"}
+              <strong>{appConfig?.base_url ? "模型服务" : "未配置"}</strong>
+              {appConfig?.base_url ? (connectionResult ? (connectionResult.ok ? " · 连接正常" : " · 连接失败") : hasKey ? " · 已配置" : " · 缺 Key") : " · 请设置"}
             </span>
           </div>
           <div className="ver">{appVersion ? `v${appVersion}` : ""} · Tauri</div>
@@ -752,14 +733,14 @@ export default function App() {
             <h1>
               {view === "task" && "新建评审"}
               {view === "history" && "评审历史"}
-              {view === "templates" && "模板管理"}
-              {view === "settings" && "模型与规则"}
+              {view === "templates" && "评审模块"}
+              {view === "settings" && "模型与运行"}
             </h1>
             <div className="sub">
-              {view === "task" && "上传混合发布包 → 识别系统 → 分系统评审"}
+              {view === "task" && "上传混合发布包 → 识别模块 → 分模块评审"}
               {view === "history" && "本机任务与文件级结果"}
-              {view === "templates" && "配置评审模板，可自定义与覆盖"}
-              {view === "settings" && "内网网关、容量与文件名规则集"}
+              {view === "templates" && "文件匹配 → 评审规范 → 模型输出"}
+              {view === "settings" && "模型连接、凭据与运行容量"}
             </div>
           </div>
           <div className="topbar-actions">
@@ -767,15 +748,39 @@ export default function App() {
           </div>
         </header>
 
+        {(connectionTesting || exporting || summarizing) && <section className="scan-progress panel" role="status">
+          <strong>{[connectionTesting ? "正在测试模型连接…" : "", exporting ? "正在导出报告…" : "", summarizing ? `正在生成 ${systemName(summarizing)} 汇总…` : ""].filter(Boolean).join(" · ")}</strong>
+          <progress aria-label="操作进行中" />
+        </section>}
+
+        {(scanning || scanError) && (
+          <section className="scan-progress panel" aria-label="扫描进度" aria-busy={scanning}>
+            <div className="inline">
+              <strong>{scanError || (scanCancelling ? "正在取消扫描…" : ({ discover: "正在发现文件…", extract: "正在解压 ZIP…", parse: "正在解析文档…", done: "正在整理扫描结果…" }[scanProgress?.phase ?? "discover"]))}</strong>
+              <span className="spacer" />
+              {scanning && <button className="btn btn-sm" disabled={scanCancelling} onClick={cancelScan}>{scanCancelling ? "取消中…" : "取消扫描"}</button>}
+              {!scanning && <button className="btn btn-sm" onClick={() => setScanError("")}>关闭</button>}
+            </div>
+            {scanning && <>
+              <progress aria-label="扫描解析进度" max={scanProgress?.total || 1} value={scanProgress?.total == null ? undefined : scanProgress.total === 0 ? 1 : scanProgress.processed} />
+              <div className="muted" aria-live="polite">
+                {scanProgress?.total == null ? `已发现 ${scanProgress?.discovered ?? 0} 个文件，正在统计总数` : `已处理 ${scanProgress.processed} / ${scanProgress.total} · 命中 ${scanProgress.matched} · ${scanProgress.total ? Math.round(scanProgress.processed / scanProgress.total * 100) : 100}%`}
+              </div>
+              <div className="scan-current" title={scanProgress?.current}>{scanProgress?.current || "准备工作区…"}</div>
+              {scanCancelling && <small>将在当前文档解析返回后停止；ZIP 解压会在读取分段间停止。</small>}
+            </>}
+          </section>
+        )}
+
         {view === "task" && !appConfig && <section className="view"><div className="empty">正在加载配置…</div></section>}
         {view === "task" && appConfig && (
           <section className="view">
             <div className="steps">
               {[
                 ["1", "选择来源", "ZIP / 目录 / 文本"],
-                ["2", "扫描与解析", "识别系统与模板"],
-                ["3", "评审配置", "格式 / 粒度 / 分块"],
-                ["4", "分析结果", "按系统分组"],
+                ["2", "扫描与解析", "识别评审模块"],
+                ["3", "确认评审", "确认范围与输出"],
+                ["4", "分析结果", "按模块分组"],
               ].map(([num, title, sub]) => (
                 <div
                   key={num}
@@ -850,7 +855,7 @@ export default function App() {
                       </div>
                       <div className="field-row">
                         <div className="field">
-                          <label>归属系统</label>
+                          <label>评审模块</label>
                           <select value={textSystem} onChange={(e) => setTextSystem(e.target.value)}>
                             {systems.map((s) => (
                               <option key={s.id} value={s.id}>
@@ -859,19 +864,19 @@ export default function App() {
                             ))}
                           </select>
                         </div>
-                        <div className="field">
-                          <label>评审模板</label>
-                          <select value={textTemplate} onChange={(e) => setTextTemplate(e.target.value)}>
-                            {templates.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
                       </div>
                     </>
                   )}
+
+                  <div className="field" style={{ marginTop: 16 }}>
+                    {appConfig.rule_sets.length > 1 && <><label htmlFor="source-rule-set">文件匹配方案（兼容旧配置）</label>
+                      <select id="source-rule-set" value={ruleSet?.id ?? ""} disabled={scanning || running} onChange={(e) => changeRuleSet(e.target.value)}>
+                        {appConfig.rule_sets.map((rs) => <option key={rs.id} value={rs.id}>{rs.name}</option>)}
+                      </select></>}
+                    <div className="inline"><span>已配置 {systems.length} 个评审模块</span>
+                      <button className="btn" onClick={() => setView("templates")}>管理评审模块</button></div>
+                    <small>按模块的文件匹配条件自动归属，使用该模块的评审规范。支持 TXT、JSON、Excel、DOC / DOCX；PDF 暂不支持解析。</small>
+                  </div>
 
                   <label className="checkline">
                     <input type="checkbox" checked={matchedOnly} onChange={(e) => setMatchedOnly(e.target.checked)} /> 仅保留命中规则的文件
@@ -891,7 +896,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>扫描与解析</h2>
-                  <span className="hint">命中规则自动归属系统与模板，可单独覆盖</span>
+                  <span className="hint">文件自动归入模块，使用模块的评审规范</span>
                   <div className="right">
                     <button className="btn btn-sm" onClick={doScan} disabled={scanning || running}>
                       重新扫描
@@ -900,7 +905,7 @@ export default function App() {
                 </div>
                 <div className="panel-body">
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <span className="tag">规则集：{scan.rule_set.name}</span>
+                    <span className="tag">匹配方案：{scan.rule_set.name}</span>
                     <span className="muted" style={{ marginLeft: "auto", fontSize: 11.5 }}>
                       命中 {scan.matched_files} / {scan.total_files}
                     </span>
@@ -913,14 +918,14 @@ export default function App() {
                           <th>文件</th>
                           <th style={{ width: 70 }}>类型</th>
                           <th style={{ width: 80 }}>大小</th>
-                          <th style={{ width: 100 }}>归属系统</th>
-                          <th style={{ width: 200 }}>评审模板</th>
+                          <th style={{ width: 100 }}>评审模块</th>
+                          <th style={{ width: 200 }}>输出格式</th>
                           <th style={{ width: 70 }}>分块</th>
                           <th style={{ width: 60 }}></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {scan.entries.map((e) => (
+                        {scan.entries.slice(scanPage * 100, (scanPage + 1) * 100).map((e) => (
                           <tr key={e.path}>
                             <td>
                               <input
@@ -941,21 +946,7 @@ export default function App() {
                             <td>{(e.size / 1024).toFixed(1)} KB</td>
                             <td>{e.matched ? <span className={`sys ${systemClass(e.system)}`} style={sysStyle(e.system)}>{systemName(e.system)}</span> : <span className="tag skip">未命中</span>}</td>
                             <td>
-                              {e.matched ? (
-                                <select
-                                  className="mini"
-                                  value={e.template_id ?? ""}
-                                  onChange={(ev) => updateEntry(e.path, { template_id: ev.target.value })}
-                                >
-                                  {templates.map((t) => (
-                                    <option key={t.id} value={t.id}>
-                                      {t.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <span className="tag skip">跳过</span>
-                              )}
+                              {e.matched ? <span>{OUTPUT_FORMAT_LABEL[moduleTemplate(e.system)?.output_format ?? "standard"]}</span> : <span className="tag skip">跳过</span>}
                             </td>
                             <td>
                               {e.matched ? (
@@ -989,6 +980,12 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+                  {scan.entries.length > 100 && <div className="inline pagination">
+                    <button className="btn btn-sm" disabled={scanPage === 0} onClick={() => setScanPage((p) => p - 1)}>上一页</button>
+                    <span>第 {scanPage + 1} / {Math.ceil(scan.entries.length / 100)} 页 · 共 {scan.entries.length} 个文件</span>
+                    <button className="btn btn-sm" disabled={(scanPage + 1) * 100 >= scan.entries.length} onClick={() => setScanPage((p) => p + 1)}>下一页</button>
+                  </div>}
+
                   <div className="preview-box">{preview}</div>
                   <div className="step-foot">
                     <button className="btn" onClick={() => setStep(1)}>
@@ -1006,23 +1003,15 @@ export default function App() {
             {step === 3 && (
               <div className="panel">
                 <div className="panel-head">
-                  <h2>评审配置</h2>
-                  <span className="hint">模板已在文件清单按系统自动匹配</span>
+                  <h2>确认评审</h2>
+                  <span className="hint">输入、评审要求和输出格式统一来自评审模块</span>
                 </div>
                 <div className="panel-body">
                   <div className="field-row">
                     <div className="field">
-                      <label>输出格式</label>
-                      <select
-                        value={appConfig.output_format}
-                        onChange={(e) => updateConfig({ output_format: e.target.value as OutputFormat })}
-                      >
-                        {(Object.keys(OUTPUT_FORMAT_LABEL) as OutputFormat[]).map((f) => (
-                          <option key={f} value={f}>
-                            {OUTPUT_FORMAT_LABEL[f]}
-                          </option>
-                        ))}
-                      </select>
+                      <label>模块输出格式</label>
+                      <p>{selectedFormats.join(" / ") || "请先扫描并选择文件"}</p>
+                      <small>由各模块的评审规范决定，可在「评审模块」中修改。</small>
                     </div>
                     <div className="field">
                       <label>分析粒度</label>
@@ -1038,6 +1027,8 @@ export default function App() {
                       </select>
                     </div>
                   </div>
+                  <details className="runtime-options">
+                    <summary>高级运行设置（通常无需修改）</summary>
                   <div className="field-row">
                     <div className="field">
                       <label>并发数</label>
@@ -1058,11 +1049,13 @@ export default function App() {
                       <input type="number" value={appConfig.chunk_size} onChange={(e) => updateConfig({ chunk_size: Number(e.target.value) || 8000 })} />
                     </div>
                   </div>
+                  </details>
                   <p className="muted" style={{ fontSize: 12 }}>
                     {appConfig.granularity === "single"
-                      ? "将把所有选中的文件合并为一次评审。"
-                      : `将分析 ${selectedEntries.length} 个文件${appConfig.granularity === "per_file_system" ? "，并按系统自动生成汇总" : ""}；失败单文件自动隔离并计入失败，不影响其他文件。`}
+                      ? "将同一模块内的所选文件合并评审，核对文件间的一致性。"
+                      : `将分析 ${selectedEntries.length} 个文件${appConfig.granularity === "per_file_system" ? "，并按模块自动生成汇总" : ""}；失败单文件自动隔离并计入失败，不影响其他文件。`}
                   </p>
+                  {mixedModuleMerge && <p className="error-text" role="alert">所选文件属于多个模块，请改为逐文件评审，或返回清单只选择同一模块的文件。</p>}
                   <div className="step-foot">
                     <button className="btn" onClick={() => setStep(2)}>
                       ← 上一步
@@ -1073,7 +1066,7 @@ export default function App() {
                         取消评审
                       </button>
                     ) : (
-                      <button className="btn btn-primary btn-lg" onClick={() => setConfirmOpen(true)} disabled={selectedEntries.length === 0}>
+                      <button className="btn btn-primary btn-lg" onClick={() => setConfirmOpen(true)} disabled={selectedEntries.length === 0 || mixedModuleMerge}>
                         开始评审
                       </button>
                     )}
@@ -1088,16 +1081,16 @@ export default function App() {
                   <div style={{ padding: 17 }}>
                     <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
                       <strong style={{ fontFamily: "var(--heading-font)", fontStyle: "italic" }}>
-                        {running ? "正在评审…" : summary?.cancelled ? "已取消" : "评审完成"}
+                        {running ? reviewStage : summary?.cancelled ? "已取消" : summary ? "评审完成" : "等待开始评审"}
                       </strong>
                       <span className="muted" style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12 }}>
-                        {doneCount} / {progressList.length || selectedEntries.length}
+                        {Math.min(doneCount, reviewTotal)} / {reviewTotal}
                       </span>
                       {running && <button className="btn btn-sm" style={{ marginLeft: 12 }} onClick={cancelReview}>取消评审</button>}
                     </div>
-                    <div className="bar">
-                      <i style={{ width: `${progressList.length ? (doneCount / progressList.length) * 100 : 0}%` }} />
-                    </div>
+                    <progress aria-label="评审完成进度" max={reviewTotal || 1} value={Math.min(doneCount, reviewTotal)} />
+                    {running && <div className="work-pulse" aria-label="评审运行中" />}
+                    {running && <small className="muted">进度按已完成评审单元统计；单个文件或合并评审时，模型返回前保持等待动画。</small>}
                     <div className="summary">
                       <div className="stat good">
                         <strong>{summary?.pass ?? 0}</strong>
@@ -1130,8 +1123,8 @@ export default function App() {
                             <span className={`sys ${sys}`} style={sysStyle(sys)}>{systemName(sys)}</span>
                             <h3>{items.length} 个文件</h3>
                             <div className="right">
-                              <button className="link" onClick={() => summarize(sys)}>
-                                生成系统汇总
+                              <button className="link" disabled={running || summarizing !== null} onClick={() => summarize(sys)}>
+                                生成模块汇总
                               </button>
                             </div>
                           </div>
@@ -1166,7 +1159,7 @@ export default function App() {
                           </table>
                           {summaries[sys] && (
                             <div className="detail-body" style={{ borderTop: "1px solid var(--line)", whiteSpace: "pre-wrap" }}>
-                              <span className="k">系统汇总：</span>
+                              <span className="k">模块汇总：</span>
                               {"\n"}
                               {summaries[sys]}
                             </div>
@@ -1184,7 +1177,7 @@ export default function App() {
                           {progressList.map((p) => (
                             <div key={p.index} style={{ marginBottom: 10 }}>
                               <div className="muted" style={{ fontSize: 12 }}>
-                                {p.file} · {p.phase}
+                                {p.file} · {({ parse: "解析资料", waiting: "等待模型", analyze: "生成评审", chunk: "分块评审", merge: "合并结果", done: "已完成" } as Record<string, string>)[p.phase] ?? "评审中"}
                               </div>
                               <div className="stream-box">{p.text || "…"}</div>
                             </div>
@@ -1204,7 +1197,7 @@ export default function App() {
                       {detail && (
                         <>
                           <p>
-                            <span className="k">系统：</span>
+                            <span className="k">模块：</span>
                             {systemName(detail.system)}
                             {detail.chunks > 1 ? ` · 基于 ${detail.chunks} 块合并` : ""}
                           </p>
@@ -1284,7 +1277,7 @@ export default function App() {
                 <div className="right">
                   <input
                     className="search"
-                    placeholder="搜索来源 / 系统"
+                    placeholder="搜索来源 / 模块"
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
                   />
@@ -1295,7 +1288,7 @@ export default function App() {
                   <tr>
                     <th>时间</th>
                     <th>来源</th>
-                    <th>含系统</th>
+                    <th>含模块</th>
                     <th>文件数</th>
                     <th>结论分布</th>
                     <th style={{ width: 150 }}>操作</th>
@@ -1375,7 +1368,7 @@ export default function App() {
                   <thead>
                     <tr>
                       <th>文件</th>
-                      <th style={{ width: 90 }}>系统</th>
+                      <th style={{ width: 90 }}>模块</th>
                       <th style={{ width: 110 }}>结论</th>
                     </tr>
                   </thead>
@@ -1398,80 +1391,15 @@ export default function App() {
           </section>
         )}
 
-        {view === "templates" && (
-          <section className="view">
-            <div className="two-col">
-              <div className="panel">
-                <div className="panel-head">
-                  <h2>评审模板</h2>
-                  <div className="right">
-                    <button className="btn btn-sm" onClick={newTemplate}>
-                      新建模板
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  {templates.map((t) => (
-                    <div key={t.id} className={`tpl-item ${editingTemplate?.id === t.id ? "is-active" : ""}`} onClick={() => setEditingTemplate(t)}>
-                      <div>
-                        <strong>{t.name}</strong>
-                        <small>{t.content}</small>
-                      </div>
-                      <span className="tag">{t.builtin ? (t.overridden ? "已覆盖" : "内置") : "自定义"}</span>
-                      {!t.builtin && (
-                        <button
-                          className="link danger"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteTemplate(t.id);
-                          }}
-                        >
-                          删
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="panel">
-                <div className="panel-head">
-                  <h2>编辑模板</h2>
-                  <div className="right">
-                    <button className="btn btn-sm" onClick={restoreBuiltin}>
-                      恢复内置
-                    </button>
-                    <button className="btn btn-primary btn-sm" onClick={saveTemplate}>
-                      保存
-                    </button>
-                  </div>
-                </div>
-                <div className="panel-body">
-                  {editingTemplate ? (
-                    <>
-                      <div className="field">
-                        <label>模板名称</label>
-                        <input value={editingTemplate.name} onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })} />
-                      </div>
-                      <div className="field">
-                        <label>Prompt 内容</label>
-                        <textarea value={editingTemplate.content} onChange={(e) => setEditingTemplate({ ...editingTemplate, content: e.target.value })} />
-                      </div>
-                      <p className="muted" style={{ fontSize: 12 }}>
-                        内置模板可「另存覆盖」；保存后写入本机配置，参与后续评审。
-                      </p>
-                    </>
-                  ) : (
-                    <div className="empty">选择左侧模板进行编辑</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+        {view === "templates" && appConfig && (
+          <ReviewModules config={appConfig} defaults={defaults} activeRuleSetId={activeRuleSetId}
+            onRuleSetChange={changeRuleSet} onChange={updateConfig} disabled={running || scanning}
+            dirty={configDirty} onSave={async () => { await api.saveSettings(appConfig); setConfigDirty(false); }} />
         )}
 
         {view === "settings" && appConfig && (
           <section className="view">
-            <div className="two-col">
+            <div className="two-col settings-layout">
               <div className="panel">
                 <div className="panel-head">
                   <h2>模型与连接</h2>
@@ -1479,50 +1407,50 @@ export default function App() {
                 </div>
                 <div className="panel-body">
                   <div className="field">
-                    <label>Base URL</label>
-                    <input value={appConfig.base_url} placeholder="http://llm-gateway.intra.corp/v1" onChange={(e) => updateConfig({ base_url: e.target.value })} />
+                    <label htmlFor="setting-1">Base URL</label>
+                    <input id="setting-1" value={appConfig.base_url} placeholder="http://llm-gateway.intra.corp/v1" onChange={(e) => updateConfig({ base_url: e.target.value })} />
                   </div>
                   <div className="field-row">
                     <div className="field">
-                      <label>模型标识</label>
-                      <input value={appConfig.model} placeholder="例如 deepseek-v4-flash" onChange={(e) => updateConfig({ model: e.target.value })} />
+                      <label htmlFor="setting-2">模型标识</label>
+                      <input id="setting-2" value={appConfig.model} placeholder="例如 deepseek-v4-flash" onChange={(e) => updateConfig({ model: e.target.value })} />
                     </div>
                     <div className="field">
-                      <label>并发数</label>
-                      <input type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
+                      <label htmlFor="setting-3">并发数</label>
+                      <input id="setting-3" type="number" min={1} max={8} value={appConfig.concurrency} onChange={(e) => updateConfig({ concurrency: Number(e.target.value) || 1 })} />
                     </div>
                   </div>
                   <div className="field">
-                    <label>API Key（{hasKey ? "已保存，留空则不修改" : "未配置"}）</label>
-                    <input type="password" value={apiKey} placeholder={hasKey ? "••••••••" : "sk-…"} onChange={(e) => setApiKey(e.target.value)} />
+                    <label htmlFor="setting-4">API Key（{hasKey ? "已保存，留空则不修改" : "未配置"}）</label>
+                    <input id="setting-4" type="password" value={apiKey} placeholder={hasKey ? "••••••••" : "sk-…"} onChange={(e) => { setApiKey(e.target.value); setConnectionResult(null); }} />
                   </div>
                   <div className="field-row">
                     <div className="field">
-                      <label>读取超时（秒）</label>
-                      <input type="number" value={appConfig.timeout_secs} onChange={(e) => updateConfig({ timeout_secs: Number(e.target.value) || 180 })} />
+                      <label htmlFor="setting-5">读取超时（秒）</label>
+                      <input id="setting-5" type="number" value={appConfig.timeout_secs} onChange={(e) => updateConfig({ timeout_secs: Number(e.target.value) || 180 })} />
                     </div>
                     <div className="field">
-                      <label>单文件上限（MB）</label>
-                      <input type="number" value={appConfig.max_file_mb} onChange={(e) => updateConfig({ max_file_mb: Number(e.target.value) || 1228 })} />
+                      <label htmlFor="setting-6">单文件上限（MB）</label>
+                      <input id="setting-6" type="number" value={appConfig.max_file_mb} onChange={(e) => updateConfig({ max_file_mb: Number(e.target.value) || 1228 })} />
                     </div>
                   </div>
                   <div className="field-row">
                     <div className="field">
-                      <label>最大文件数</label>
-                      <input type="number" value={appConfig.max_files} onChange={(e) => updateConfig({ max_files: Number(e.target.value) || 800 })} />
+                      <label htmlFor="setting-7">最大文件数</label>
+                      <input id="setting-7" type="number" value={appConfig.max_files} onChange={(e) => updateConfig({ max_files: Number(e.target.value) || 800 })} />
                     </div>
                     <div className="field">
-                      <label>历史保留（天，0=永久）</label>
-                      <input type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
+                      <label htmlFor="setting-8">历史保留（天，0=永久）</label>
+                      <input id="setting-8" type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />
                     </div>
                   </div>
                   <div className="field">
-                    <label>API Key 请求头（留空为 Bearer）</label>
-                    <input value={appConfig.api_key_header} placeholder="留空，或 api-key / X-API-Key" onChange={(e) => updateConfig({ api_key_header: e.target.value })} />
+                    <label htmlFor="setting-9">API Key 请求头（留空为 Bearer）</label>
+                    <input id="setting-9" value={appConfig.api_key_header} placeholder="留空，或 api-key / X-API-Key" onChange={(e) => updateConfig({ api_key_header: e.target.value })} />
                   </div>
                   <div className="field">
-                    <label>代理地址（留空直连内网）</label>
-                    <input value={appConfig.proxy_url} placeholder="可选：http://proxy.intra:8080" onChange={(e) => updateConfig({ proxy_url: e.target.value })} />
+                    <label htmlFor="setting-10">代理地址（留空直连内网）</label>
+                    <input id="setting-10" value={appConfig.proxy_url} placeholder="可选：http://proxy.intra:8080" onChange={(e) => updateConfig({ proxy_url: e.target.value })} />
                   </div>
                   <label className="checkline">
                     <input type="checkbox" checked={appConfig.stream_enabled} onChange={(e) => updateConfig({ stream_enabled: e.target.checked })} /> 使用流式响应（网关不支持时关闭）
@@ -1533,21 +1461,25 @@ export default function App() {
                   <div style={{ display: "flex", gap: 9, marginTop: 14 }}>
                     <button
                       className="btn"
+                      disabled={connectionTesting}
                       onClick={async () => {
+                        setConnectionTesting(true);
+                        setConnectionResult(null);
                         try {
                           const reply = await api.testConnection(gatewayCfg(), apiKey || undefined);
-                          toast(`连接正常：${reply}`);
+                          setConnectionResult({ ok: true, message: `连接正常：${reply}` });
                         } catch (e) {
-                          toast(String(e));
-                        }
+                          setConnectionResult({ ok: false, message: String(e) });
+                        } finally { setConnectionTesting(false); }
                       }}
                     >
-                      测试连接
+                      {connectionTesting ? "连接测试中…" : "测试连接"}
                     </button>
                     <button className="btn btn-primary" onClick={saveSettings}>
                       保存设置
                     </button>
                   </div>
+                  {connectionResult && <div className={`connection-result ${connectionResult.ok ? "success" : "error"}`} role={connectionResult.ok ? "status" : "alert"}>{connectionResult.message}</div>}
                   <p className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
                     API Key 通过系统凭据库加密保存（Windows 凭据管理器 / macOS Keychain），不进入配置、历史或导出。
                   </p>
@@ -1555,181 +1487,10 @@ export default function App() {
               </div>
 
               <div className="panel">
-                <div className="panel-head">
-                  <h2>文件名规则集</h2>
-                  <span className="hint">规则 = glob + 归属系统 + 评审模板</span>
-                  <div className="right">
-                    <select value={activeRuleSetId} onChange={(e) => setActiveRuleSetId(e.target.value)}>
-                      {appConfig.rule_sets.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button className="btn btn-sm" onClick={newRuleSet}>
-                      新建
-                    </button>
-                    <button className="btn btn-sm" onClick={() => deleteRuleSet(ruleSet?.id ?? "")}>
-                      删除
-                    </button>
-                  </div>
+                <div className="panel-head"><h2>文件匹配与评审规范</h2></div>
+                <div className="panel-body"><p>每个评审模块统一管理文件匹配、输入说明、评审要求和输出格式。</p>
+                  <button className="btn" onClick={() => setView("templates")}>管理评审模块</button>
                 </div>
-                <div className="panel-body" style={{ paddingTop: 16 }}>
-                  {ruleSet ? (
-                    <>
-                      <div className="field">
-                        <label>规则集名称</label>
-                        <input
-                          value={ruleSet.name}
-                          onChange={(e) => {
-                            const next = appConfig.rule_sets.map((r) => (r.id === ruleSet.id ? { ...r, name: e.target.value } : r));
-                            updateConfig({ rule_sets: next });
-                          }}
-                        />
-                      </div>
-                      <table className="data">
-                        <thead>
-                          <tr>
-                            <th>匹配模式（glob）</th>
-                            <th style={{ width: 110 }}>归属系统</th>
-                            <th style={{ width: 180 }}>评审模板</th>
-                            <th style={{ width: 44 }}></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {ruleSet.rules.map((r) => (
-                            <tr key={r.id}>
-                              <td>
-                                <input className="cell-input" value={r.pattern} onChange={(e) => updateRule(r.id, { pattern: e.target.value })} />
-                              </td>
-                              <td>
-                                <select className="mini" value={r.system} onChange={(e) => updateRule(r.id, { system: e.target.value })}>
-                                  {systems.map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <select className="mini" value={r.template_id} onChange={(e) => updateRule(r.id, { template_id: e.target.value })}>
-                                  {templates.map((t) => (
-                                    <option key={t.id} value={t.id}>
-                                      {t.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <button
-                                  className="link danger"
-                                  onClick={() => {
-                                    const next = appConfig.rule_sets.map((rs) =>
-                                      rs.id === ruleSet.id ? { ...rs, rules: rs.rules.filter((x) => x.id !== r.id) } : rs
-                                    );
-                                    updateConfig({ rule_sets: next });
-                                  }}
-                                >
-                                  删
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <div className="inline" style={{ marginTop: 10 }}>
-                        <input
-                          placeholder="输入 glob 模式，如 *namespace*.json"
-                          onKeyDown={(e) => {
-                            if (e.key !== "Enter") return;
-                            const pattern = (e.target as HTMLInputElement).value.trim();
-                            if (!pattern) return;
-                            const next = appConfig.rule_sets.map((rs) =>
-                              rs.id === ruleSet.id
-                                ? {
-                                    ...rs,
-                                    rules: [
-                                      ...rs.rules,
-                                      { id: `r-${Date.now()}`, pattern, system: systems[0]?.id ?? "other", template_id: templates[0]?.id ?? "tpl-generic", enabled: true },
-                                    ],
-                                  }
-                                : rs
-                            );
-                            updateConfig({ rule_sets: next });
-                            (e.target as HTMLInputElement).value = "";
-                          }}
-                        />
-                        <button className="btn btn-sm" onClick={saveSettings}>
-                          保存规则集
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="empty">正在加载…</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="panel" style={{ marginTop: 15 }}>
-              <div className="panel-head">
-                <h2>系统类型</h2>
-                <span className="hint">名称 + 颜色 + 默认模板，可扩展</span>
-                <div className="right">
-                  <button className="btn btn-sm" onClick={newSystem}>
-                    新增系统
-                  </button>
-                </div>
-              </div>
-              <div className="panel-body" style={{ paddingTop: 16 }}>
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>系统 ID</th>
-                      <th>名称</th>
-                      <th style={{ width: 120 }}>颜色</th>
-                      <th style={{ width: 190 }}>默认模板</th>
-                      <th style={{ width: 50 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {systems.map((s) => (
-                      <tr key={s.id}>
-                        <td>
-                          <span className="path">{s.id}</span>
-                        </td>
-                        <td>
-                          <input className="cell-input" value={s.name} onChange={(e) => updateSystem(s.id, { name: e.target.value })} />
-                        </td>
-                        <td>
-                          <input
-                            className="cell-input"
-                            type="color"
-                            value={s.color}
-                            onChange={(e) => updateSystem(s.id, { color: e.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <select className="mini" value={s.default_template_id} onChange={(e) => updateSystem(s.id, { default_template_id: e.target.value })}>
-                            {templates.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td>
-                          <button className="link danger" onClick={() => deleteSystem(s.id)} disabled={s.id === "other"}>
-                            删
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                  修改后点击下方「保存设置」写入本机配置。
-                </p>
               </div>
             </div>
           </section>
@@ -1744,7 +1505,7 @@ export default function App() {
             </div>
             <div className="modal-body">
               <p className="muted" style={{ marginTop: 0 }}>
-                即将把所选文件内容发送至下列内网网关进行评审，请确认。
+                即将把所选文件内容发送至下列模型服务进行评审，请确认。
               </p>
               <table className="data">
                 <tbody>
@@ -1760,19 +1521,19 @@ export default function App() {
                     <td className="k">分析对象</td>
                     <td>
                       {appConfig.granularity === "single"
-                        ? `${selectedEntries.length} 个文件（合并一次性）`
+                        ? `${selectedEntries.length} 个文件（同模块合并评审）`
                         : `${selectedEntries.length} 个文件`}
                     </td>
                   </tr>
                   <tr>
                     <td className="k">输出格式 / 粒度</td>
                     <td>
-                      {OUTPUT_FORMAT_LABEL[appConfig.output_format]} · {GRANULARITY_LABEL[appConfig.granularity]}
+                      {selectedFormats.join(" / ")} · {GRANULARITY_LABEL[appConfig.granularity]}
                     </td>
                   </tr>
                 </tbody>
               </table>
-              {!hasKey && <p className="error-text">尚未配置 API Key，请先到「模型与规则」设置。</p>}
+              {!hasKey && <p className="error-text">尚未配置 API Key，请先到「模型与运行」设置。</p>}
             </div>
             <div className="modal-foot">
               <button className="btn" onClick={() => setConfirmOpen(false)}>
