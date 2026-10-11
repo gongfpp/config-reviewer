@@ -16,6 +16,7 @@ export interface Template {
 export interface Rule {
   id: string;
   pattern: string;
+  match_type?: "glob" | "filename" | "keyword" | "extension";
   system: string;
   template_id: string;
   enabled: boolean;
@@ -202,4 +203,14 @@ export interface SystemFileSummary {
   file: string;
   verdict: string;
   risks: string[];
+}
+
+export interface ScanProgress {
+  task_id: string;
+  phase: "discover" | "extract" | "parse" | "done";
+  discovered: number;
+  processed: number;
+  total: number | null;
+  matched: number;
+  current: string;
 }

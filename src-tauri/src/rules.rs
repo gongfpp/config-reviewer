@@ -84,6 +84,7 @@ fn rule(id: &str, pattern: &str, system: &str, template_id: &str) -> Rule {
     Rule {
         id: id.into(),
         pattern: pattern.into(),
+        match_type: "glob".into(),
         system: system.into(),
         template_id: template_id.into(),
         enabled: true,
@@ -115,7 +116,21 @@ pub fn resolve(rule_set: &RuleSet, rel_path: &str, name: &str) -> Option<(String
         if !rule.enabled {
             continue;
         }
-        if pattern_matches(&rule.pattern, rel_path, name) {
+        let pattern = rule.pattern.trim();
+        let matched = match rule.match_type.as_str() {
+            "filename" => name.to_lowercase() == pattern.to_lowercase(),
+            "keyword" => {
+                !pattern.is_empty() && name.to_lowercase().contains(&pattern.to_lowercase())
+            }
+            "extension" => std::path::Path::new(name)
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case(pattern.trim_start_matches('.')))
+                .unwrap_or(false),
+            "glob" => pattern_matches(pattern, rel_path, name),
+            _ => false,
+        };
+        if matched {
             return Some((
                 rule.id.clone(),
                 rule.system.clone(),
@@ -124,4 +139,33 @@ pub fn resolve(rule_set: &RuleSet, rel_path: &str, name: &str) -> Option<(String
         }
     }
     None
+}
+
+/// 配置错误应在保存或扫描前反馈，不能静默变成“零命中”。
+pub fn validate(rule_set: &RuleSet) -> Result<(), String> {
+    for (index, rule) in rule_set.rules.iter().enumerate().filter(|(_, r)| r.enabled) {
+        let p = rule.pattern.trim();
+        let invalid = match rule.match_type.as_str() {
+            "glob" => globset::GlobBuilder::new(&p.replace('\\', "/"))
+                .backslash_escape(false)
+                .build()
+                .is_err(),
+            "filename" | "keyword" => p.contains('/') || p.contains('\\'),
+            "extension" => {
+                p.trim_start_matches('.').is_empty()
+                    || p.trim_start_matches('.')
+                        .chars()
+                        .any(|c| !c.is_ascii_alphanumeric())
+            }
+            _ => true,
+        };
+        if p.is_empty() || invalid {
+            return Err(format!(
+                "规则集「{}」第 {} 条规则的匹配条件无效",
+                rule_set.name,
+                index + 1
+            ));
+        }
+    }
+    Ok(())
 }

@@ -62,6 +62,9 @@ pub fn save_settings(
     config: AppConfig,
     api_key: Option<String>,
 ) -> Result<(), String> {
+    for rule_set in &config.rule_sets {
+        rules::validate(rule_set)?;
+    }
     if let Some(key) = api_key {
         if !key.trim().is_empty() {
             secrets::save_api_key(&key)?;
@@ -80,19 +83,33 @@ pub fn clear_api_key() -> Result<(), String> {
     secrets::save_api_key("")
 }
 
-fn ensure_idle(state: &AppState) -> Result<(), String> {
-    let active = state
+/// 原子登记扫描/评审，异步后仍保持互斥，避免清理正在使用的工作区。
+fn reserve_task(state: &AppState, task_id: &str) -> Result<Arc<AtomicBool>, String> {
+    let mut active = state
         .cancels
         .lock()
         .map_err(|_| "任务状态不可用".to_string())?;
     if !active.is_empty() {
-        return Err("评审正在运行，请先取消或等待完成后再扫描。".into());
+        return Err("扫描或评审正在运行，请先取消或等待完成。".into());
     }
-    Ok(())
+    let cancel = Arc::new(AtomicBool::new(false));
+    active.insert(task_id.into(), cancel.clone());
+    Ok(cancel)
+}
+
+enum ScanSource {
+    Directory(String),
+    Uploads(Vec<String>),
+    Text {
+        content: String,
+        system: String,
+        template_id: String,
+    },
 }
 
 #[tauri::command]
-pub fn scan_directory(
+pub async fn scan_directory(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     rule_set: RuleSet,
@@ -100,66 +117,50 @@ pub fn scan_directory(
     matched_only: bool,
     threshold: usize,
     chunk_size: usize,
+    request_id: Option<String>,
 ) -> Result<ScanResult, String> {
-    ensure_idle(&state)?;
-    let cfg = config::load(&state.config_path);
-    let task_id = Uuid::new_v4().to_string();
-    let workspace = fresh_workspace(&state.workspace_root, &task_id)?;
-    let opts = scan_opts(&cfg, recursive, matched_only, threshold, chunk_size);
-    let entries =
-        match scan::scan_directory(PathBuf::from(&path).as_path(), &rule_set, &workspace, &opts) {
-            Ok(entries) => entries,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&workspace);
-                return Err(e);
-            }
-        };
-    build_result("dir", &path, task_id, workspace, entries, rule_set, &cfg)
+    run_scan(
+        app,
+        state,
+        ScanSource::Directory(path),
+        rule_set,
+        recursive,
+        matched_only,
+        threshold,
+        chunk_size,
+        request_id,
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn scan_uploads(
+pub async fn scan_uploads(
+    app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<String>,
     rule_set: RuleSet,
     matched_only: bool,
     threshold: usize,
     chunk_size: usize,
+    request_id: Option<String>,
 ) -> Result<ScanResult, String> {
-    ensure_idle(&state)?;
-    let cfg = config::load(&state.config_path);
-    let task_id = Uuid::new_v4().to_string();
-    let workspace = fresh_workspace(&state.workspace_root, &task_id)?;
-    let opts = scan_opts(&cfg, true, matched_only, threshold, chunk_size);
-    let entries = match scan::scan_uploads(&paths, &rule_set, &workspace, &opts) {
-        Ok(entries) => entries,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&workspace);
-            return Err(e);
-        }
-    };
-    let source_ref = if paths.len() == 1 {
-        PathBuf::from(&paths[0])
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default()
-    } else {
-        format!("{} 个文件", paths.len())
-    };
-    build_result(
-        "upload",
-        &source_ref,
-        task_id,
-        workspace,
-        entries,
+    run_scan(
+        app,
+        state,
+        ScanSource::Uploads(paths),
         rule_set,
-        &cfg,
+        true,
+        matched_only,
+        threshold,
+        chunk_size,
+        request_id,
     )
+    .await
 }
 
-/// 粘贴文本来源：写入工作区后作为单个文本文件评审。
 #[tauri::command]
-pub fn scan_text(
+pub async fn scan_text(
+    app: AppHandle,
     state: State<'_, AppState>,
     content: String,
     system: String,
@@ -167,54 +168,173 @@ pub fn scan_text(
     rule_set: RuleSet,
     threshold: usize,
     chunk_size: usize,
+    request_id: Option<String>,
 ) -> Result<ScanResult, String> {
-    ensure_idle(&state)?;
-    if content.trim().is_empty() {
-        return Err("内容为空".into());
-    }
-    let cfg = config::load(&state.config_path);
-    let task_id = Uuid::new_v4().to_string();
-    let workspace = fresh_workspace(&state.workspace_root, &task_id)?;
-    let name = format!("pasted-{}.txt", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
-    let abs = workspace.join(&name);
-    if let Err(e) = std::fs::write(&abs, content.as_bytes()) {
-        let _ = std::fs::remove_dir_all(&workspace);
-        return Err(e.to_string());
-    }
-    let parsed = match parse::parse_file(&abs, "text", threshold, chunk_size) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&workspace);
-            return Err(e);
-        }
-    };
-    let entry = ScanEntry {
-        path: name.clone(),
-        abs_path: abs.to_string_lossy().to_string(),
-        name: name.clone(),
-        ext: "txt".into(),
-        kind: "text".into(),
-        size: content.len() as u64,
-        system: Some(system),
-        rule_id: None,
-        template_id: Some(template_id),
-        matched: true,
-        selected: true,
-        chunks: parsed.chunks.len(),
-        parse_status: "ok".into(),
-        parse_error: None,
-        preview: parsed.preview,
-        text_len: parsed.text.chars().count(),
-    };
-    build_result(
-        "text",
-        &name,
-        task_id,
-        workspace,
-        vec![entry],
+    run_scan(
+        app,
+        state,
+        ScanSource::Text {
+            content,
+            system,
+            template_id,
+        },
         rule_set,
-        &cfg,
+        false,
+        false,
+        threshold,
+        chunk_size,
+        request_id,
     )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_scan(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: ScanSource,
+    rule_set: RuleSet,
+    recursive: bool,
+    matched_only: bool,
+    threshold: usize,
+    chunk_size: usize,
+    request_id: Option<String>,
+) -> Result<ScanResult, String> {
+    rules::validate(&rule_set)?;
+    let task_id = request_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    // 请求 ID 同时用于事件关联及目录名称，只接受 UUID。
+    Uuid::parse_str(&task_id).map_err(|_| "扫描请求 ID 无效".to_string())?;
+    let cancel = reserve_task(&state, &task_id)?;
+    let root = state.workspace_root.clone();
+    let config_path = state.config_path.clone();
+    let worker_id = task_id.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut progress = scan::initial_progress(worker_id.clone());
+        let mut last_event = Instant::now();
+        let mut last_phase = String::new();
+        let mut observer = |p: &scan::ScanProgress| -> Result<(), String> {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("扫描已取消".into());
+            }
+            if p.phase != last_phase || last_event.elapsed().as_millis() >= 75 {
+                let _ = app.emit("scan://progress", p);
+                last_event = Instant::now();
+                last_phase = p.phase.clone();
+            }
+            Ok(())
+        };
+        observer(&progress)?;
+        let cfg = config::load(&config_path);
+        let opts = scan_opts(&cfg, recursive, matched_only, threshold, chunk_size);
+        let workspace = fresh_workspace(&root, &worker_id)?;
+        let result = (|| {
+            let (source_type, source_ref, entries) = match source {
+                ScanSource::Directory(path) => {
+                    let entries = scan::scan_directory_with_progress(
+                        PathBuf::from(&path).as_path(),
+                        &rule_set,
+                        &workspace,
+                        &opts,
+                        &mut progress,
+                        &mut observer,
+                    )?;
+                    ("dir", path, entries)
+                }
+                ScanSource::Uploads(paths) => {
+                    let entries = scan::scan_uploads_with_progress(
+                        &paths,
+                        &rule_set,
+                        &workspace,
+                        &opts,
+                        &mut progress,
+                        &mut observer,
+                    )?;
+                    let source_ref = if paths.len() == 1 {
+                        PathBuf::from(&paths[0])
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string()
+                    } else {
+                        format!("{} 个文件", paths.len())
+                    };
+                    ("upload", source_ref, entries)
+                }
+                ScanSource::Text {
+                    content,
+                    system,
+                    template_id,
+                } => {
+                    if content.trim().is_empty() {
+                        return Err("内容为空".into());
+                    }
+                    if content.len() as u64 > opts.max_file_bytes {
+                        return Err("粘贴内容超过单文件大小上限".into());
+                    }
+                    let name = format!("pasted-{}.txt", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+                    let abs = workspace.join(&name);
+                    std::fs::write(&abs, content.as_bytes()).map_err(|e| e.to_string())?;
+                    progress.phase = "parse".into();
+                    progress.discovered = 1;
+                    progress.total = Some(1);
+                    progress.current = name.clone();
+                    observer(&progress)?;
+                    let parsed = parse::parse_file(&abs, "text", opts.threshold, opts.chunk_size)?;
+                    let entry = ScanEntry {
+                        path: name.clone(),
+                        abs_path: abs.to_string_lossy().to_string(),
+                        name: name.clone(),
+                        ext: "txt".into(),
+                        kind: "text".into(),
+                        size: content.len() as u64,
+                        system: Some(system),
+                        rule_id: None,
+                        template_id: Some(template_id),
+                        matched: true,
+                        selected: true,
+                        chunks: parsed.chunks.len(),
+                        parse_status: "ok".into(),
+                        parse_error: None,
+                        preview: parsed.preview,
+                        text_len: parsed.text.chars().count(),
+                    };
+                    progress.processed = 1;
+                    progress.matched = 1;
+                    progress.phase = "done".into();
+                    observer(&progress)?;
+                    ("text", name, vec![entry])
+                }
+            };
+            build_result(
+                source_type,
+                &source_ref,
+                worker_id,
+                workspace.clone(),
+                entries,
+                rule_set,
+                &cfg,
+            )
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(&workspace);
+        }
+        result
+    })
+    .await
+    .map_err(|e| format!("扫描工作线程异常：{e}"));
+    state
+        .cancels
+        .lock()
+        .map_err(|_| "任务状态不可用".to_string())?
+        .remove(&task_id);
+    outcome?
+}
+
+#[tauri::command]
+pub fn cancel_scan(state: State<'_, AppState>, task_id: String) {
+    if let Some(flag) = state.cancels.lock().unwrap().get(&task_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
 }
 
 fn scan_opts(
@@ -304,17 +424,7 @@ pub async fn run_review(
     } else {
         request.task_id.clone()
     };
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut active = state
-            .cancels
-            .lock()
-            .map_err(|_| "任务状态不可用".to_string())?;
-        if !active.is_empty() {
-            return Err("已有评审正在运行，请先取消或等待完成。".into());
-        }
-        active.insert(task_id.clone(), cancel.clone());
-    }
+    let cancel = reserve_task(&state, &task_id)?;
 
     let outcome = run_review_inner(&app, &state, &request, &task_id, &cancel).await;
 
@@ -423,6 +533,19 @@ async fn run_review_inner(
     })
 }
 
+async fn parse_in_background(
+    path: PathBuf,
+    kind: String,
+    threshold: usize,
+    chunk_size: usize,
+) -> Result<parse::Parsed, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        parse::parse_file(&path, &kind, threshold, chunk_size)
+    })
+    .await
+    .map_err(|e| format!("解析工作线程异常：{e}"))?
+}
+
 /// 逐文件分析：解析 → 单块直评 / 多块并行后按序合并。
 #[allow(clippy::too_many_arguments)]
 async fn review_one(
@@ -452,7 +575,15 @@ async fn review_one(
     );
 
     let path = PathBuf::from(&file.abs_path);
-    let parsed = match parse::parse_file(&path, &file.kind, threshold, chunk_size) {
+    // 解析也占用并发额度，避免数百个大文档同时进入阻塞线程池。
+    let permit = sem.acquire().await.expect("review semaphore stays open");
+    let parsed_result = if cancel.load(Ordering::Relaxed) {
+        Err("已取消".into())
+    } else {
+        parse_in_background(path, file.kind.clone(), threshold, chunk_size).await
+    };
+    drop(permit);
+    let parsed = match parsed_result {
         Ok(p) => p,
         Err(err) => {
             let result = FileResult {
@@ -670,12 +801,14 @@ async fn review_combined(
             Some("正在解析…"),
             None,
         );
-        match parse::parse_file(
-            &PathBuf::from(&file.abs_path),
-            &file.kind,
+        match parse_in_background(
+            PathBuf::from(&file.abs_path),
+            file.kind.clone(),
             threshold,
             chunk_size,
-        ) {
+        )
+        .await
+        {
             Ok(p) => {
                 parsed_any += 1;
                 combined.push_str(&format!(
@@ -960,8 +1093,10 @@ pub async fn summarize_system(
 }
 
 #[tauri::command]
-pub fn export_xlsx(path: String, rows: Vec<ExportRow>) -> Result<(), String> {
-    export::write_xlsx(&path, &rows)
+pub async fn export_xlsx(path: String, rows: Vec<ExportRow>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || export::write_xlsx(&path, &rows))
+        .await
+        .map_err(|e| format!("导出工作线程异常：{e}"))?
 }
 
 #[tauri::command]
@@ -1041,6 +1176,38 @@ pub fn delete_history(state: State<'_, AppState>, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn export_text(path: String, content: String) -> Result<(), String> {
-    std::fs::write(path, content.as_bytes()).map_err(|e| format!("导出失败：{e}"))
+pub async fn export_text(path: String, content: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(path, content.as_bytes()).map_err(|e| format!("导出失败：{e}"))
+    })
+    .await
+    .map_err(|e| format!("导出工作线程异常：{e}"))?
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    #[test]
+    fn scan_and_review_share_atomic_reservation_and_release() {
+        let state = AppState {
+            db_path: PathBuf::new(),
+            workspace_root: PathBuf::new(),
+            config_path: PathBuf::new(),
+            cancels: Mutex::new(HashMap::new()),
+        };
+        let flag = reserve_task(&state, "scan").unwrap();
+        assert!(reserve_task(&state, "review").is_err());
+        assert!(reserve_task(&state, "another-scan").is_err());
+        state
+            .cancels
+            .lock()
+            .unwrap()
+            .get("scan")
+            .unwrap()
+            .store(true, Ordering::Relaxed);
+        assert!(flag.load(Ordering::Relaxed));
+        state.cancels.lock().unwrap().remove("scan");
+        assert!(reserve_task(&state, "next").is_ok());
+    }
 }

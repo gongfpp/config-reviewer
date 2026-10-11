@@ -26,6 +26,7 @@ export const hasApiKey = () => invoke<boolean>("has_api_key");
 export const clearApiKey = () => invoke<void>("clear_api_key");
 
 export const scanDirectory = (args: {
+  requestId: string;
   path: string;
   ruleSet: RuleSet;
   recursive: boolean;
@@ -35,6 +36,7 @@ export const scanDirectory = (args: {
 }) => invoke<ScanResult>("scan_directory", args);
 
 export const scanUploads = (args: {
+  requestId: string;
   paths: string[];
   ruleSet: RuleSet;
   matchedOnly: boolean;
@@ -43,6 +45,7 @@ export const scanUploads = (args: {
 }) => invoke<ScanResult>("scan_uploads", args);
 
 export const scanText = (args: {
+  requestId: string;
   content: string;
   system: string;
   templateId: string;
@@ -89,3 +92,5 @@ export const getHistory = (id: string) => invoke<TaskDetail | null>("get_history
 export const deleteHistory = (id: string) => invoke<void>("delete_history", { id });
 
 export const exportText = (path: string, content: string) => invoke<void>("export_text", { path, content });
+
+export const cancelScan = (taskId: string) => invoke<void>("cancel_scan", { taskId });

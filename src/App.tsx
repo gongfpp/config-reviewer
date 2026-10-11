@@ -18,6 +18,7 @@ import type {
   Rule,
   ScanEntry,
   ScanResult,
+  ScanProgress,
   SystemFileSummary,
   SystemType,
   TaskDetail,
@@ -102,6 +103,19 @@ export default function App() {
   const [step, setStep] = useState(1);
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanError, setScanError] = useState("");
+  const [scanCancelling, setScanCancelling] = useState(false);
+  const [scanPage, setScanPage] = useState(0);
+  const activeScanRef = useRef<string | null>(null);
+  const [newRule, setNewRule] = useState<Rule | null>(null);
+  const [ruleError, setRuleError] = useState("");
+  const [savingRule, setSavingRule] = useState(false);
+  const [reviewTotal, setReviewTotal] = useState(0);
+  const [reviewStage, setReviewStage] = useState("");
+  const [connectionTesting, setConnectionTesting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [summarizing, setSummarizing] = useState<string | null>(null);
   const [preview, setPreview] = useState("选择文件可预览解析后的文本…");
 
   const [apiKey, setApiKey] = useState("");
@@ -252,12 +266,31 @@ export default function App() {
   const doScan = async () => {
     if (running || scanning) return toast("请先等待当前扫描或评审完成。");
     if (!ruleSet || !appConfig) return;
+    const requestId = crypto.randomUUID();
+    activeScanRef.current = requestId;
     setScanning(true);
+    setScanCancelling(false);
+    setScanError("");
+    setScan(null);
+    setPreview("选择文件可预览解析后的文本…");
+    setDetail(null);
+    setResults([]);
+    setSummary(null);
+    setProgress({});
+    setSummaries({});
+    setReviewTotal(0);
+    setScanProgress({ task_id: requestId, phase: "discover", discovered: 0, processed: 0, total: null, matched: 0, current: "" });
+    let unlisten: (() => void) | undefined;
     try {
+      // 先完成订阅再调用后端，避免短任务漏掉首个事件。
+      unlisten = await listen<ScanProgress>("scan://progress", ({ payload }) => {
+        if (payload.task_id === activeScanRef.current) setScanProgress(payload);
+      });
       let result: ScanResult;
       if (source === "dir") {
         if (!dirPath.trim()) throw new Error("请填写目录路径");
         result = await api.scanDirectory({
+          requestId,
           path: dirPath,
           ruleSet,
           recursive,
@@ -268,6 +301,7 @@ export default function App() {
       } else if (source === "upload") {
         if (uploadPaths.length === 0) throw new Error("请先选择文件或 ZIP");
         result = await api.scanUploads({
+          requestId,
           paths: uploadPaths,
           ruleSet,
           matchedOnly,
@@ -277,6 +311,7 @@ export default function App() {
       } else {
         if (!textContent.trim()) throw new Error("请先粘贴内容");
         result = await api.scanText({
+          requestId,
           content: textContent,
           system: textSystem,
           templateId: textTemplate,
@@ -287,13 +322,25 @@ export default function App() {
       }
       activeReviewRef.current = null;
       setScan(result);
+      setScanPage(0);
       setStep(2);
       toast(`扫描完成：命中 ${result.matched_files} / ${result.total_files} 个文件`);
     } catch (e) {
-      toast(String(e));
+      setScanError(String(e));
+      setStep(1);
     } finally {
+      unlisten?.();
+      activeScanRef.current = null;
       setScanning(false);
+      setScanCancelling(false);
     }
+  };
+
+  const cancelScan = async () => {
+    if (!activeScanRef.current) return;
+    setScanCancelling(true);
+    try { await api.cancelScan(activeScanRef.current); }
+    catch (e) { setScanCancelling(false); toast(String(e)); }
   };
 
   const updateEntry = (path: string, patch: Partial<ScanEntry>) => {
@@ -319,6 +366,9 @@ export default function App() {
     if (!scan || !appConfig) throw new Error("任务未就绪");
     analysisRevisionRef.current += 1;
     activeReviewRef.current = scan.task_id;
+    setProgress({});
+    setReviewTotal(appConfig.granularity === "single" ? 1 : files.length);
+    setReviewStage("正在评审…");
     return api.runReview({
       task_id: scan.task_id,
       workspace: scan.workspace,
@@ -348,6 +398,7 @@ export default function App() {
   const autoSummarize = async (list: FileResult[]) => {
     if (!appConfig || appConfig.granularity !== "per_file_system") return;
     const revision = analysisRevisionRef.current;
+    setReviewStage("正在生成系统汇总…");
     const ids = Array.from(new Set(list.map((r) => r.system ?? "other")));
     for (const sys of ids) {
       const items = list.filter((r) => (r.system ?? "other") === sys);
@@ -385,6 +436,7 @@ export default function App() {
       const result = await runRequest(files);
       setSummary(result);
       setResults(result.results);
+      setReviewStage("正在保存结果…");
       await persistTask(result);
       toast(result.cancelled ? "已取消，部分结果已保存" : "评审完成，已保存到本机历史");
       await autoSummarize(result.results);
@@ -408,6 +460,7 @@ export default function App() {
       return;
     }
     setRunning(true);
+    setSummary(null);
     try {
       const result = await runRequest(files);
       const merged = [...results];
@@ -483,6 +536,7 @@ export default function App() {
   };
 
   const exportExcelOf = async (list: FileResult[], ruleByPath: Map<string, string>) => {
+    if (exporting) return;
     if (list.length === 0) return toast("没有可导出的结果");
     const path = await save({
       defaultPath: `review-${Date.now()}.xlsx`,
@@ -503,12 +557,13 @@ export default function App() {
         time: now,
       };
     });
+    setExporting(true);
     try {
       await api.exportXlsx(path, rows);
       toast("已导出 Excel");
     } catch (e) {
       toast(String(e));
-    }
+    } finally { setExporting(false); }
   };
 
   // 命中规则：rule_id → glob 模式，供导出展示。
@@ -526,20 +581,25 @@ export default function App() {
   const exportExcel = () => exportExcelOf(results, ruleMap);
 
   const download = async (filename: string, content: string, _type: string) => {
+    if (exporting) return;
     try {
       const extension = filename.split(".").pop() ?? "txt";
       const path = await save({ defaultPath: filename, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
       if (!path) return;
+      setExporting(true);
       await api.exportText(path, content);
       toast("报告已导出");
     } catch (e) { toast(String(e)); }
+    finally { setExporting(false); }
   };
 
   const summarize = async (system: string) => {
+    if (summarizing || running) return;
     const revision = analysisRevisionRef.current;
     const owner = activeReviewRef.current;
     const items = results.filter((r) => (r.system ?? "other") === system);
     if (items.length === 0) return;
+    setSummarizing(system);
     const files: SystemFileSummary[] = items.map((r) => ({ file: r.file, verdict: r.verdict, risks: r.risks }));
     try {
       const text = await api.summarizeSystem({
@@ -552,7 +612,7 @@ export default function App() {
       toast(`已生成 ${systemName(system)} 汇总`);
     } catch (e) {
       toast(String(e));
-    }
+    } finally { setSummarizing(null); }
   };
 
   const viewHistory = async (id: string) => {
@@ -690,6 +750,37 @@ export default function App() {
     updateConfig({ rule_sets: next });
   };
 
+  const openNewRule = () => {
+    if (!ruleSet) return toast("请先新建规则集");
+    const system = systems.find((s) => s.id === "xxl") ?? systems[0];
+    setRuleError("");
+    setNewRule({ id: `r-${crypto.randomUUID()}`, pattern: "", match_type: "keyword",
+      system: system?.id ?? "other", template_id: system?.default_template_id ?? templates[0]?.id ?? "", enabled: true });
+  };
+
+  const addRule = async () => {
+    if (!appConfig || !ruleSet || !newRule || savingRule) return;
+    if (!newRule.pattern.trim()) return setRuleError("请输入匹配条件");
+    const rule = { ...newRule, pattern: newRule.pattern.trim() };
+    // 新规则优先，确保不会被既有宽泛规则遮住；列表可调整顺序。
+    const next = { ...appConfig, rule_sets: appConfig.rule_sets.map((rs) => rs.id === ruleSet.id ? { ...rs, rules: [rule, ...rs.rules] } : rs) };
+    setSavingRule(true);
+    try {
+      await api.saveSettings(next);
+      setAppConfig(next);
+      setNewRule(null);
+      toast("扫描规则已添加并保存，重新扫描后生效");
+    } catch (e) { setRuleError(String(e)); }
+    finally { setSavingRule(false); }
+  };
+
+  const moveRule = (index: number, offset: number) => {
+    if (!appConfig || !ruleSet) return;
+    const rules = [...ruleSet.rules];
+    [rules[index], rules[index + offset]] = [rules[index + offset], rules[index]];
+    updateConfig({ rule_sets: appConfig.rule_sets.map((rs) => rs.id === ruleSet.id ? { ...rs, rules } : rs) });
+  };
+
   const saveSettings = async () => {
     if (!appConfig) return;
     try {
@@ -766,6 +857,30 @@ export default function App() {
             <span className="chip good">Private Banking</span>
           </div>
         </header>
+
+        {(connectionTesting || exporting || summarizing) && <section className="scan-progress panel" role="status">
+          <strong>{[connectionTesting ? "正在测试模型连接…" : "", exporting ? "正在导出报告…" : "", summarizing ? `正在生成 ${systemName(summarizing)} 汇总…` : ""].filter(Boolean).join(" · ")}</strong>
+          <progress aria-label="操作进行中" />
+        </section>}
+
+        {(scanning || scanError) && (
+          <section className="scan-progress panel" aria-label="扫描进度" aria-busy={scanning}>
+            <div className="inline">
+              <strong>{scanError || (scanCancelling ? "正在取消扫描…" : ({ discover: "正在发现文件…", extract: "正在解压 ZIP…", parse: "正在解析文档…", done: "正在整理扫描结果…" }[scanProgress?.phase ?? "discover"]))}</strong>
+              <span className="spacer" />
+              {scanning && <button className="btn btn-sm" disabled={scanCancelling} onClick={cancelScan}>{scanCancelling ? "取消中…" : "取消扫描"}</button>}
+              {!scanning && <button className="btn btn-sm" onClick={() => setScanError("")}>关闭</button>}
+            </div>
+            {scanning && <>
+              <progress aria-label="扫描解析进度" max={scanProgress?.total || 1} value={scanProgress?.total == null ? undefined : scanProgress.total === 0 ? 1 : scanProgress.processed} />
+              <div className="muted" aria-live="polite">
+                {scanProgress?.total == null ? `已发现 ${scanProgress?.discovered ?? 0} 个文件，正在统计总数` : `已处理 ${scanProgress.processed} / ${scanProgress.total} · 命中 ${scanProgress.matched} · ${scanProgress.total ? Math.round(scanProgress.processed / scanProgress.total * 100) : 100}%`}
+              </div>
+              <div className="scan-current" title={scanProgress?.current}>{scanProgress?.current || "准备工作区…"}</div>
+              {scanCancelling && <small>将在当前文档解析返回后停止；ZIP 解压会在读取分段间停止。</small>}
+            </>}
+          </section>
+        )}
 
         {view === "task" && !appConfig && <section className="view"><div className="empty">正在加载配置…</div></section>}
         {view === "task" && appConfig && (
@@ -873,6 +988,18 @@ export default function App() {
                     </>
                   )}
 
+                  <div className="field" style={{ marginTop: 16 }}>
+                    <label htmlFor="source-rule-set">扫描规则集</label>
+                    <div className="inline source-rule-picker">
+                      <select id="source-rule-set" value={ruleSet?.id ?? ""} disabled={scanning || running} onChange={(e) => setActiveRuleSetId(e.target.value)}>
+                        {appConfig.rule_sets.map((rs) => <option key={rs.id} value={rs.id}>{rs.name}</option>)}
+                      </select>
+                      <button className="btn" onClick={openNewRule} disabled={!ruleSet || scanning || running}>＋ 新增扫描规则</button>
+                      <button className="btn" onClick={() => { setView("settings"); requestAnimationFrame(() => document.getElementById("scan-rules")?.scrollIntoView()); }}>管理规则</button>
+                    </div>
+                    <small>按文件名、文件名关键字或后缀分配系统与评审模板。Excel / Word / TXT 可归属同一系统。</small>
+                  </div>
+
                   <label className="checkline">
                     <input type="checkbox" checked={matchedOnly} onChange={(e) => setMatchedOnly(e.target.checked)} /> 仅保留命中规则的文件
                   </label>
@@ -920,7 +1047,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {scan.entries.map((e) => (
+                        {scan.entries.slice(scanPage * 100, (scanPage + 1) * 100).map((e) => (
                           <tr key={e.path}>
                             <td>
                               <input
@@ -989,6 +1116,12 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+                  {scan.entries.length > 100 && <div className="inline pagination">
+                    <button className="btn btn-sm" disabled={scanPage === 0} onClick={() => setScanPage((p) => p - 1)}>上一页</button>
+                    <span>第 {scanPage + 1} / {Math.ceil(scan.entries.length / 100)} 页 · 共 {scan.entries.length} 个文件</span>
+                    <button className="btn btn-sm" disabled={(scanPage + 1) * 100 >= scan.entries.length} onClick={() => setScanPage((p) => p + 1)}>下一页</button>
+                  </div>}
+
                   <div className="preview-box">{preview}</div>
                   <div className="step-foot">
                     <button className="btn" onClick={() => setStep(1)}>
@@ -1088,16 +1221,16 @@ export default function App() {
                   <div style={{ padding: 17 }}>
                     <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
                       <strong style={{ fontFamily: "var(--heading-font)", fontStyle: "italic" }}>
-                        {running ? "正在评审…" : summary?.cancelled ? "已取消" : "评审完成"}
+                        {running ? reviewStage : summary?.cancelled ? "已取消" : summary ? "评审完成" : "等待开始评审"}
                       </strong>
                       <span className="muted" style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12 }}>
-                        {doneCount} / {progressList.length || selectedEntries.length}
+                        {Math.min(doneCount, reviewTotal)} / {reviewTotal}
                       </span>
                       {running && <button className="btn btn-sm" style={{ marginLeft: 12 }} onClick={cancelReview}>取消评审</button>}
                     </div>
-                    <div className="bar">
-                      <i style={{ width: `${progressList.length ? (doneCount / progressList.length) * 100 : 0}%` }} />
-                    </div>
+                    <progress aria-label="评审完成进度" max={reviewTotal || 1} value={Math.min(doneCount, reviewTotal)} />
+                    {running && <div className="work-pulse" aria-label="评审运行中" />}
+                    {running && <small className="muted">进度按已完成评审单元统计；单个文件或合并评审时，模型返回前保持等待动画。</small>}
                     <div className="summary">
                       <div className="stat good">
                         <strong>{summary?.pass ?? 0}</strong>
@@ -1130,7 +1263,7 @@ export default function App() {
                             <span className={`sys ${sys}`} style={sysStyle(sys)}>{systemName(sys)}</span>
                             <h3>{items.length} 个文件</h3>
                             <div className="right">
-                              <button className="link" onClick={() => summarize(sys)}>
+                              <button className="link" disabled={running || summarizing !== null} onClick={() => summarize(sys)}>
                                 生成系统汇总
                               </button>
                             </div>
@@ -1533,16 +1666,18 @@ export default function App() {
                   <div style={{ display: "flex", gap: 9, marginTop: 14 }}>
                     <button
                       className="btn"
+                      disabled={connectionTesting}
                       onClick={async () => {
+                        setConnectionTesting(true);
                         try {
                           const reply = await api.testConnection(gatewayCfg(), apiKey || undefined);
                           toast(`连接正常：${reply}`);
                         } catch (e) {
                           toast(String(e));
-                        }
+                        } finally { setConnectionTesting(false); }
                       }}
                     >
-                      测试连接
+                      {connectionTesting ? "连接测试中…" : "测试连接"}
                     </button>
                     <button className="btn btn-primary" onClick={saveSettings}>
                       保存设置
@@ -1554,10 +1689,10 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="panel">
+              <div className="panel" id="scan-rules">
                 <div className="panel-head">
-                  <h2>文件名规则集</h2>
-                  <span className="hint">规则 = glob + 归属系统 + 评审模板</span>
+                  <h2>扫描规则</h2>
+                  <span className="hint">匹配文件 → 系统 + 模板</span>
                   <div className="right">
                     <select value={activeRuleSetId} onChange={(e) => setActiveRuleSetId(e.target.value)}>
                       {appConfig.rule_sets.map((r) => (
@@ -1567,8 +1702,9 @@ export default function App() {
                       ))}
                     </select>
                     <button className="btn btn-sm" onClick={newRuleSet}>
-                      新建
+                      新建规则集
                     </button>
+                    <button className="btn btn-primary btn-sm" onClick={openNewRule} disabled={!ruleSet}>＋ 新增扫描规则</button>
                     <button className="btn btn-sm" onClick={() => deleteRuleSet(ruleSet?.id ?? "")}>
                       删除
                     </button>
@@ -1587,20 +1723,30 @@ export default function App() {
                           }}
                         />
                       </div>
-                      <table className="data">
+                      <p className="muted">自上而下使用第一条命中规则，不区分大小写。关键字匹配文件名，不搜索正文。修改顺序或条件后请保存规则集。</p>
+                      <div className="table-scroll"><table className="data rule-table">
                         <thead>
                           <tr>
-                            <th>匹配模式（glob）</th>
+                            <th>启用 / 顺序</th>
+                            <th>匹配方式与条件</th>
                             <th style={{ width: 110 }}>归属系统</th>
                             <th style={{ width: 180 }}>评审模板</th>
                             <th style={{ width: 44 }}></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {ruleSet.rules.map((r) => (
+                          {ruleSet.rules.map((r, index) => (
                             <tr key={r.id}>
                               <td>
-                                <input className="cell-input" value={r.pattern} onChange={(e) => updateRule(r.id, { pattern: e.target.value })} />
+                                <input type="checkbox" aria-label={`启用规则 ${index + 1}`} checked={r.enabled} onChange={(e) => updateRule(r.id, { enabled: e.target.checked })} />
+                                <button className="link" aria-label={`上移规则 ${index + 1}`} disabled={index === 0} onClick={() => moveRule(index, -1)}>↑</button>
+                                <button className="link" aria-label={`下移规则 ${index + 1}`} disabled={index === ruleSet.rules.length - 1} onClick={() => moveRule(index, 1)}>↓</button>
+                              </td>
+                              <td>
+                                <select aria-label={`规则 ${index + 1} 匹配方式`} value={r.match_type ?? "glob"} onChange={(e) => updateRule(r.id, { match_type: e.target.value as Rule["match_type"] })}>
+                                  <option value="filename">文件名完全匹配</option><option value="keyword">文件名包含关键字</option><option value="extension">文件后缀</option><option value="glob">高级 glob</option>
+                                </select>
+                                <input aria-label={`规则 ${index + 1} 匹配条件`} className="cell-input" value={r.pattern} onChange={(e) => updateRule(r.id, { pattern: e.target.value })} />
                               </td>
                               <td>
                                 <select className="mini" value={r.system} onChange={(e) => updateRule(r.id, { system: e.target.value })}>
@@ -1636,32 +1782,11 @@ export default function App() {
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                      </table></div>
+                      {ruleSet.rules.length === 0 && <div className="empty">还没有扫描规则，点击上方“新增扫描规则”添加。</div>}
                       <div className="inline" style={{ marginTop: 10 }}>
-                        <input
-                          placeholder="输入 glob 模式，如 *namespace*.json"
-                          onKeyDown={(e) => {
-                            if (e.key !== "Enter") return;
-                            const pattern = (e.target as HTMLInputElement).value.trim();
-                            if (!pattern) return;
-                            const next = appConfig.rule_sets.map((rs) =>
-                              rs.id === ruleSet.id
-                                ? {
-                                    ...rs,
-                                    rules: [
-                                      ...rs.rules,
-                                      { id: `r-${Date.now()}`, pattern, system: systems[0]?.id ?? "other", template_id: templates[0]?.id ?? "tpl-generic", enabled: true },
-                                    ],
-                                  }
-                                : rs
-                            );
-                            updateConfig({ rule_sets: next });
-                            (e.target as HTMLInputElement).value = "";
-                          }}
-                        />
-                        <button className="btn btn-sm" onClick={saveSettings}>
-                          保存规则集
-                        </button>
+                        <button className="btn btn-primary btn-sm" onClick={saveSettings}>保存规则集</button>
+                        <small>扫描阶段仅在本机提取文本，确认开始评审后才发送给模型。</small>
                       </div>
                     </>
                   ) : (
@@ -1735,6 +1860,36 @@ export default function App() {
           </section>
         )}
       </div>
+
+      {newRule && ruleSet && <div className="modal-mask">
+        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="new-rule-title">
+          <div className="modal-head"><h2 id="new-rule-title">新增扫描规则</h2></div>
+          <div className="modal-body">
+            <p>添加到「{ruleSet.name}」，保存后放在规则列表首位，优先匹配。</p>
+            <div className="field"><label htmlFor="rule-mode">匹配方式</label>
+              <select id="rule-mode" value={newRule.match_type} onChange={(e) => setNewRule({ ...newRule, match_type: e.target.value as Rule["match_type"] })}>
+                <option value="filename">文件名完全匹配</option><option value="keyword">文件名包含关键字</option><option value="extension">文件后缀</option><option value="glob">高级 glob（路径 / 组合）</option>
+              </select>
+            </div>
+            <div className="field"><label htmlFor="rule-pattern">匹配条件</label>
+              <input autoFocus id="rule-pattern" value={newRule.pattern} onChange={(e) => setNewRule({ ...newRule, pattern: e.target.value })} placeholder={newRule.match_type === "extension" ? "xlsx（或 .xlsx）" : newRule.match_type === "filename" ? "XXL-JOB配置.xlsx" : newRule.match_type === "glob" ? "*xxl*.{xlsx,docx,txt}" : "XXL-JOB"} />
+              <small>{newRule.match_type === "keyword" ? "只匹配文件名中的文字，不搜索文档正文。" : newRule.match_type === "extension" ? "每条填写一个后缀；xlsx、docx、txt 可分别添加，使用同一模板。" : "不区分大小写。高级 glob 可匹配相对路径及多个后缀。"}</small>
+            </div>
+            <div className="field"><label htmlFor="rule-system">归属系统</label>
+              <select id="rule-system" value={newRule.system} onChange={(e) => setNewRule({ ...newRule, system: e.target.value, template_id: systems.find((sys) => sys.id === e.target.value)?.default_template_id ?? newRule.template_id })}>
+                {systems.map((sys) => <option key={sys.id} value={sys.id}>{sys.name}</option>)}
+              </select>
+            </div>
+            <div className="field"><label htmlFor="rule-template">评审模板</label>
+              <select id="rule-template" value={newRule.template_id} onChange={(e) => setNewRule({ ...newRule, template_id: e.target.value })}>
+                {templates.map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
+              </select>
+            </div>
+            {ruleError && <p className="error-text" role="alert">{ruleError}</p>}
+          </div>
+          <div className="modal-foot"><button className="btn" disabled={savingRule} onClick={() => setNewRule(null)}>取消</button><button className="btn btn-primary" disabled={savingRule} onClick={addRule}>{savingRule ? "保存中…" : "添加并保存规则"}</button></div>
+        </div>
+      </div>}
 
       {confirmOpen && scan && appConfig && (
         <div className="modal-mask" onClick={() => setConfirmOpen(false)}>

@@ -676,3 +676,159 @@ fn windows_globs_ignore_case_and_accept_backslashes() {
         "中文.CONF"
     ));
 }
+
+#[test]
+fn rule_match_modes_priority_disabled_and_legacy_config() {
+    use crate::model::{Rule, RuleSet};
+    let legacy: Rule = serde_json::from_value(serde_json::json!({
+        "id": "legacy", "pattern": "*xxl*", "system": "other", "template_id": "tpl-generic"
+    }))
+    .unwrap();
+    assert_eq!(legacy.match_type, "glob");
+    let mut set = RuleSet {
+        id: "test".into(),
+        name: "test".into(),
+        builtin: false,
+        rules: vec![legacy],
+    };
+    for (mode, pattern, positive, negative) in [
+        (
+            "filename",
+            "XXL配置.xlsx",
+            "xxl配置.XLSX",
+            "old-XXL配置.xlsx",
+        ),
+        (
+            "keyword",
+            "XXL-JOB",
+            "系统-xxl-job说明.docx",
+            "系统说明.docx",
+        ),
+        ("extension", ".xlsx", "普通配置.XLSX", "配置.xlsx.txt"),
+        (
+            "glob",
+            "*xxl*.{xlsx,docx,txt}",
+            "xxl任务.txt",
+            "xxl任务.pdf",
+        ),
+    ] {
+        let rule = Rule {
+            id: "new".into(),
+            pattern: pattern.into(),
+            match_type: mode.into(),
+            system: "xxl".into(),
+            template_id: "tpl-xxl".into(),
+            enabled: true,
+        };
+        set.rules.insert(0, rule);
+        rules::validate(&set).unwrap();
+        assert_eq!(rules::resolve(&set, positive, positive).unwrap().0, "new");
+        assert_ne!(
+            rules::resolve(&set, negative, negative).map(|r| r.0),
+            Some("new".into())
+        );
+        set.rules[0].enabled = false;
+        assert_ne!(
+            rules::resolve(&set, positive, positive).map(|r| r.0),
+            Some("new".into())
+        );
+        set.rules.remove(0);
+    }
+    set.rules[0].pattern = "[".into();
+    assert!(rules::validate(&set).is_err());
+}
+
+#[test]
+fn scan_reports_real_totals_and_can_cancel_before_parsing() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["apollo-a.json", "apollo-b.json", "unmatched.txt"] {
+        std::fs::write(temp.path().join(name), "{\"timeout\":30}").unwrap();
+    }
+    let mut progress = scan::initial_progress("test".into());
+    let mut events = Vec::new();
+    let entries = scan::scan_directory_with_progress(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut progress,
+        &mut |p| {
+            events.push(p.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.iter().filter(|e| e.matched).count(), 2);
+    assert!(events
+        .iter()
+        .any(|p| p.phase == "discover" && p.total.is_none()));
+    let last = events.last().unwrap();
+    assert_eq!(last.phase, "done");
+    assert_eq!(last.total, Some(3));
+    assert_eq!(last.processed, 3);
+    assert_eq!(last.matched, 2);
+    let result = scan::scan_directory_with_progress(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut scan::initial_progress("cancel".into()),
+        &mut |p| {
+            if p.phase == "parse" {
+                Err("扫描已取消".into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+    assert_eq!(result.unwrap_err(), "扫描已取消");
+}
+
+#[test]
+fn scan_enforces_total_limit_even_when_no_rules_match() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("a.txt"), "a").unwrap();
+    std::fs::write(temp.path().join("b.txt"), "b").unwrap();
+    let mut options = opts();
+    options.max_files = 1;
+    options.matched_only = true;
+    let result = scan::scan_directory(
+        temp.path(),
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &options,
+    );
+    assert!(result.unwrap_err().contains("超过上限"));
+}
+
+#[test]
+fn zip_progress_and_cancel_during_extraction() {
+    let temp = tempfile::tempdir().unwrap();
+    let zip_path = temp.path().join("release.zip");
+    let file = std::fs::File::create(&zip_path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    zip.start_file("apollo.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    use std::io::Write;
+    zip.write_all(b"{\"retry\":3}").unwrap();
+    zip.finish().unwrap();
+    let mut progress = scan::initial_progress("zip".into());
+    let mut saw_extract = false;
+    let result = scan::scan_uploads_with_progress(
+        &[zip_path.to_string_lossy().into_owned()],
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut progress,
+        &mut |p| {
+            if p.phase == "extract" {
+                saw_extract = true;
+                return Err("扫描已取消".into());
+            }
+            Ok(())
+        },
+    );
+    assert!(saw_extract);
+    assert_eq!(result.unwrap_err(), "扫描已取消");
+    assert!(!temp.path().join("work").exists());
+}

@@ -199,3 +199,22 @@ input[type="color"].cell-input { padding: 2px; height: 28px; cursor: pointer; }
 .modal-body { padding: 16px 18px; }
 .modal-body .k { color: var(--ok); font-weight: 700; width: 130px; }
 .modal-foot { display: flex; gap: 10px; padding: 13px 18px; border-top: 1px solid var(--line); }
+
+/* 后台任务进度在任意页面可见；原生 progress 支持未知总量状态。 */
+.scan-progress { margin: 16px 24px 0; padding: 16px; flex-shrink: 0; }
+progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-color: var(--accent); }
+.scan-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 8px; font-size: 12px; }
+.work-pulse { height: 3px; overflow: hidden; background: var(--line); margin-bottom: 8px; }
+.work-pulse::after { content: ""; display: block; width: 25%; height: 100%; background: var(--accent); animation: work-pulse 1.5s ease-in-out infinite alternate; }
+@keyframes work-pulse { to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .work-pulse::after { animation: none; } }
+#scan-rules .panel-head, #scan-rules .right { flex-wrap: wrap; }
+#scan-rules .right { gap: 6px; }
+.rule-table { min-width: 630px; }
+.rule-table select { width: 100%; margin-bottom: 5px; }
+.rule-table .link { padding: 2px 5px; }
+.pagination { justify-content: flex-end; padding: 10px 0; font-size: 12px; }
+.modal { max-height: 90vh; overflow-y: auto; }
+
+.source-rule-picker select { min-width: 0; width: auto; flex: 1; }
+.source-rule-picker .btn { flex-shrink: 0; white-space: nowrap; }

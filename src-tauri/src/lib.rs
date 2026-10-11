@@ -49,6 +49,7 @@ pub fn run() {
             commands::scan_directory,
             commands::scan_uploads,
             commands::scan_text,
+            commands::cancel_scan,
             commands::test_connection,
             commands::cancel_review,
             commands::run_review,

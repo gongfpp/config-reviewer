@@ -5,10 +5,16 @@ use serde::{Deserialize, Serialize};
 pub struct Rule {
     pub id: String,
     pub pattern: String,
+    #[serde(default = "default_match_type")]
+    pub match_type: String,
     pub system: String,
     pub template_id: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+fn default_match_type() -> String {
+    "glob".into()
 }
 
 fn default_true() -> bool {
