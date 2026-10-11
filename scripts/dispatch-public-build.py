@@ -29,25 +29,34 @@ def run(args, *, input=None, check=True):
 if run(['git', 'status', '--porcelain']).stdout.strip():
     raise SystemExit('请先提交改动；构建只接受可追溯的干净 Git 快照。')
 active = json.loads(run(['gh', 'run', 'list', '--repo', REPO, '--limit', '10', '--json', 'status']).stdout)
-if any(item['status'] in ('queued', 'in_progress', 'waiting', 'pending') for item in active):
+isolated = options.workflow == 'windows.yml'
+if not isolated and any(item['status'] in ('queued', 'in_progress', 'waiting', 'pending') for item in active):
     raise SystemExit('请等 public 仓库当前构建结束后再生成新密钥，避免影响排队中的构建。')
 sha = run(['git', 'rev-parse', '--short', 'HEAD']).stdout.strip()
 version = json.loads((ROOT / 'package.json').read_text())['version']
 tag = f'source-{version}-{sha}'
 archive = subprocess.check_output(['git', 'archive', '--format=tar', 'HEAD'], cwd=ROOT)
 key, nonce = secrets.token_bytes(32), secrets.token_bytes(12)
+suffix = secrets.token_hex(6).upper()
+key_secret = f'SOURCE_KEY_{suffix}' if isolated else 'SOURCE_ARCHIVE_KEY'
+hash_secret = f'SOURCE_HASH_{suffix}' if isolated else 'SOURCE_ARCHIVE_SHA256'
+if isolated:
+    tag += f'-{suffix.lower()}'
 with tempfile.TemporaryDirectory(prefix='reviewer-encrypted-build-') as temp:
     asset = pathlib.Path(temp) / 'source.enc'
     asset.write_bytes(nonce + AESGCM(key).encrypt(nonce, archive, b'config-reviewer-source-v1'))
-    run(['gh', 'secret', 'set', 'SOURCE_ARCHIVE_KEY', '--repo', REPO], input=key.hex())
-    run(['gh', 'secret', 'set', 'SOURCE_ARCHIVE_SHA256', '--repo', REPO], input=hashlib.sha256(archive).hexdigest())
+    run(['gh', 'secret', 'set', key_secret, '--repo', REPO], input=key.hex())
+    run(['gh', 'secret', 'set', hash_secret, '--repo', REPO], input=hashlib.sha256(archive).hexdigest())
     if run(['gh', 'release', 'view', tag, '--repo', REPO], check=False).returncode:
         notes = pathlib.Path(temp) / 'notes.md'
         notes.write_text('临时 AES-GCM 加密构建输入，不包含明文源码。成功构建后清除输入及对应 Secret。')
         run(['gh', 'release', 'create', tag, '--repo', REPO, '--target', 'main', '--title', f'临时加密构建输入 {sha}', '--notes-file', str(notes)])
     run(['gh', 'release', 'upload', tag, str(asset), '--repo', REPO, '--clobber'])
 arguments = ['gh', 'workflow', 'run', options.workflow, '--repo', REPO, '-f', f'source_tag={tag}']
+if isolated:
+    arguments += ['-f', f'source_key_secret={key_secret}', '-f', f'source_hash_secret={hash_secret}']
 if options.tools_run:
     arguments += ['-f', f'tools_run={options.tools_run}']
 run(arguments)
 print(f'已启动 public Windows 构建：源码 {sha}，输入 {tag}')
+print(f'构建完成后清理 Secret 名称：{key_secret}、{hash_secret}')
