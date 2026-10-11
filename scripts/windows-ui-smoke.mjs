@@ -29,15 +29,23 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const gateway = `http://127.0.0.1:${server.address().port}/v1`;
 const artifacts = path.resolve('artifacts/ui-smoke'); await mkdir(artifacts, { recursive: true });
 let app, browser, page;
+let appOutput = '';
 const errors = [];
 async function launch() {
   app = spawn(executable, ['--qa-data-dir', path.join(root, 'appdata')], { env: { ...process.env, PATH: process.env.REVIEWER_RUNTIME_PATH || process.env.PATH, APPDATA: path.join(root, 'appdata'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222', WEBVIEW2_USER_DATA_FOLDER: path.join(root, 'webview') } });
+  app.stdout?.on('data', data => { appOutput += data.toString(); });
+  app.stderr?.on('data', data => { appOutput += data.toString(); });
+  app.on('error', error => { appOutput += String(error); });
   for (let i = 0; i < 60; i++) {
     try { browser = await chromium.connectOverCDP('http://127.0.0.1:9222'); break; }
     catch { await new Promise(resolve => setTimeout(resolve, 500)); }
   }
-  if (!browser) throw new Error('WebView2 did not expose CDP');
+  if (!browser) {
+    await writeFile(path.join(artifacts, 'app-startup.txt'), `Exit code: ${app.exitCode}\n${appOutput}`);
+    console.log(`App startup diagnostics: exit=${app.exitCode}\n${appOutput}`);
+    throw new Error('WebView2 did not expose CDP');
+  }
   for (let i = 0; i < 30; i++) {
     page = browser.contexts().flatMap(c => c.pages()).find(p => !p.url().startsWith('devtools:'));
     if (page) break; await new Promise(resolve => setTimeout(resolve, 200));
