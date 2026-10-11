@@ -9,7 +9,7 @@
 1. 将完整 ZIP 复制进内网，校验旁边的 `FULL-KIT-SHA256.txt`，完整解压到短路径，例如 `C:\ReviewerKit`。不要直接在 ZIP 内运行；开发时需要解压后的完整目录。
 2. 双击 `1-install-environment.cmd`，接受 Windows 的管理员提升。脚本先校验工具文件，安装微软离线签名证书、缺少的 .NET / VC++ 运行库、WebView2，最后从本地布局安装 C++ Build Tools 和 Windows 10 SDK。没有下载命令，VS 使用 `--noWeb`。若返回 3010，先重启，再执行本步骤。
 3. 双击 `2-build-test-run.cmd`，离线安装项目依赖、检查 TypeScript、执行 Rust 回归测试、编译并打开应用。不生成应用安装包。
-4. 双击 `3-edit-source.cmd` 打开包内 VS Code；也可以让内网 LLM 修改源码。修改后重新执行第二步构建入口。仅使用已缓存依赖的改动无需外网。
+4. 双击 `3-edit-source.cmd` 打开包内 VS Code；也可以让内网 LLM 修改源码。修改后先关闭正在运行的应用，再重新执行 `2-build-test-run.cmd`，避免 Windows 锁住旧 EXE。仅使用已缓存依赖的改动无需外网。
 5. `4-run-prebuilt.cmd` 可运行包内现成的独立 EXE（环境安装后可用）；它不会自动包含后来修改的源码。修改后的应用位于 `src-tauri\target\x86_64-pc-windows-msvc\debug\config-reviewer.exe`。
 
 使用命令行时，打开普通 64 位 Windows PowerShell：
