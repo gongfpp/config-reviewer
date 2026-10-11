@@ -9,7 +9,7 @@
 1. 在允许联网的电脑下载完整 ZIP，按内网介质管理流程导入。
 2. 使用 `Get-FileHash .\ConfigReviewer_0.1.4_x64-setup.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 核对文件；实际 EXE 名以压缩包内容为准。
 3. 首次使用运行 `*-setup.exe`。已装好 WebView2 的电脑也可直接运行独立 `config-reviewer.exe`；它本身不包含 WebView2 安装器。默认安装到当前用户目录；WebView2 安装需服从单位权限策略。杀毒/AppLocker/WDAC 阻止 EXE 或 WebView2 时需由管理员放行。本项目没有配置机构代码签名。
-4. 启动「配置评审台」，在「模型与规则」填写网关 Base URL（通常含 `/v1`）、模型标识和 API Key，保存后测试连接。
+4. 启动「配置评审台」，在「模型与运行」填写网关 Base URL（通常含 `/v1`）、模型标识和 API Key，保存后测试连接。
 5. 默认鉴权为 `Authorization: Bearer <Key>`。要求 `api-key` 或 `X-API-Key` 的网关可填写「API Key 请求头」。默认直连，代理留空，不继承系统外网代理；需要代理时显式填写。
 6. 启用「允许内网 HTTP」。默认使用流式响应；网关拒绝流式参数时关闭。测试连接使用相同响应模式。
 

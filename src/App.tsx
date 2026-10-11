@@ -197,6 +197,15 @@ export default function App() {
 
   const systems = appConfig?.systems ?? [];
   const templates = appConfig?.templates ?? [];
+  useEffect(() => {
+    if (!systems.some((s) => s.id === textSystem)) setTextSystem(systems[0]?.id ?? "");
+  }, [systems, textSystem]);
+  const changeRuleSet = (id: string) => {
+    setActiveRuleSetId(id);
+    setScan(null);
+    setStep(1);
+    setConfirmOpen(false);
+  };
   const ruleSet = useMemo(
     () => appConfig?.rule_sets.find((r) => r.id === activeRuleSetId) ?? appConfig?.rule_sets[0] ?? null,
     [appConfig, activeRuleSetId]
@@ -400,8 +409,8 @@ export default function App() {
     await api.saveTask({
       sourceType: scan.source_type,
       sourceRef: scan.source_ref,
-      ruleSet,
-      templates,
+      ruleSet: scan.rule_set,
+      templates: scan.templates,
       summary,
     });
     refreshHistory();
@@ -859,7 +868,7 @@ export default function App() {
 
                   <div className="field" style={{ marginTop: 16 }}>
                     {appConfig.rule_sets.length > 1 && <><label htmlFor="source-rule-set">文件匹配方案（兼容旧配置）</label>
-                      <select id="source-rule-set" value={ruleSet?.id ?? ""} disabled={scanning || running} onChange={(e) => setActiveRuleSetId(e.target.value)}>
+                      <select id="source-rule-set" value={ruleSet?.id ?? ""} disabled={scanning || running} onChange={(e) => changeRuleSet(e.target.value)}>
                         {appConfig.rule_sets.map((rs) => <option key={rs.id} value={rs.id}>{rs.name}</option>)}
                       </select></>}
                     <div className="inline"><span>已配置 {systems.length} 个评审模块</span>
@@ -1379,7 +1388,7 @@ export default function App() {
 
         {view === "templates" && appConfig && (
           <ReviewModules config={appConfig} defaults={defaults} activeRuleSetId={activeRuleSetId}
-            onRuleSetChange={setActiveRuleSetId} onChange={updateConfig} disabled={running || scanning}
+            onRuleSetChange={changeRuleSet} onChange={updateConfig} disabled={running || scanning}
             dirty={configDirty} onSave={async () => { await api.saveSettings(appConfig); setConfigDirty(false); }} />
         )}
 
