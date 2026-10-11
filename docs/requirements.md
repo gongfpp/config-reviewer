@@ -67,7 +67,7 @@
 │  Rust 后端                                                             │
 │   ├─ 采集：walkdir 目录遍历 / zip 解压 / 复制到工作区                  │
 │   ├─ 路由：glob 规则匹配 → 归属系统 + 评审模板（内置可改）            │
-│   ├─ 解析：calamine(Excel) · docx(Word) · serde_json(JSON) · 文本      │
+│   ├─ 解析：calamine(Excel) · rwml(DOC) + ZIP/XML(DOCX) · serde_json(JSON) · 文本      │
 │   ├─ 分块：按类型切块，超阈值触发；LLM 汇总为文件结论                  │
 │   ├─ LLM：reqwest + tokio，SSE 流式；Semaphore 并发=3                  │
 │   ├─ 存储：rusqlite(SQLite) 任务/文件/分块结果/快照；工作区任务结束清理│
@@ -85,7 +85,7 @@
 | 目录遍历 | `walkdir` |
 | 压缩包 | `zip` |
 | Excel | `calamine` |
-| Word | `docx-rs`（或 `zip` + `quick-xml` 读 `word/document.xml`） |
+| Word | DOC：`rwml`（仅正文和表格）；DOCX：`zip` + `quick-xml` 读 `word/document.xml` |
 | JSON | `serde_json` |
 | HTTP / 流式 | `reqwest`（`stream`）+ `tokio` + `eventsource-stream` |
 | 存储 | `rusqlite` |

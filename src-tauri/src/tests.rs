@@ -832,3 +832,78 @@ fn zip_progress_and_cancel_during_extraction() {
     assert_eq!(result.unwrap_err(), "扫描已取消");
     assert!(!temp.path().join("work").exists());
 }
+
+#[test]
+fn legacy_doc_chinese_tables_repetition_and_chunks() {
+    let bytes = include_bytes!("../tests/fixtures/legacy-word.doc");
+    let text = parse::legacy_doc_text(bytes).unwrap();
+    assert!(
+        text.contains("执行器：订单同步；超时 30 秒；失败重试 3 次。"),
+        "{text}"
+    );
+    assert!(text.contains("订单同步 | orderSyncJob | 3"), "{text}");
+    assert!(text.contains("库存同步 | stockSyncJob | 2"), "{text}");
+    assert_eq!(text.matches("重复检查").count(), 2);
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("XXL操作手册.DOC");
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(parse::kind_for("DOC"), "word");
+    let parsed = parse::parse_file(&path, "word", 40, 30).unwrap();
+    assert_eq!(parsed.text, text);
+    assert!(parsed.chunks.len() > 1);
+}
+
+#[test]
+fn legacy_doc_rejects_fake_and_truncated_files() {
+    assert!(parse::legacy_doc_text(b"fake doc")
+        .unwrap_err()
+        .contains("不是"));
+    let bytes = include_bytes!("../tests/fixtures/legacy-word.doc");
+    assert!(parse::legacy_doc_text(&bytes[..512])
+        .unwrap_err()
+        .contains("损坏"));
+}
+
+#[test]
+fn legacy_doc_rejects_encrypted_and_old_versions() {
+    use std::io::{Cursor, Seek, SeekFrom};
+    let original = include_bytes!("../tests/fixtures/legacy-word.doc");
+    for (offset, replacement, expected) in [(10, 0x0100u16, "已加密"), (2, 0x0065u16, "Word 6/95")]
+    {
+        let mut compound = cfb::CompoundFile::open(Cursor::new(original.to_vec())).unwrap();
+        {
+            let mut word = compound.open_stream("WordDocument").unwrap();
+            word.seek(SeekFrom::Start(offset)).unwrap();
+            word.write_all(&replacement.to_le_bytes()).unwrap();
+        }
+        let bytes = compound.into_inner().into_inner();
+        assert!(parse::legacy_doc_text(&bytes)
+            .unwrap_err()
+            .contains(expected));
+    }
+}
+
+#[test]
+fn legacy_doc_in_zip_routes_and_parses() {
+    let temp = tempfile::tempdir().unwrap();
+    let zip = temp.path().join("发布包.zip");
+    zip_fixture(
+        &zip,
+        &[(
+            "XXL操作手册.DOC",
+            include_bytes!("../tests/fixtures/legacy-word.doc"),
+        )],
+    );
+    let rs = rules::default_rule_sets().remove(0);
+    let entries = scan::scan_uploads(
+        &[zip.to_string_lossy().into_owned()],
+        &rs,
+        &temp.path().join("workspace"),
+        &opts(),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].parse_status, "ok");
+    assert_eq!(entries[0].system.as_deref(), Some("xxl"));
+    assert!(entries[0].preview.contains("orderSyncJob"));
+}

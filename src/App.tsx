@@ -1872,8 +1872,8 @@ export default function App() {
               </select>
             </div>
             <div className="field"><label htmlFor="rule-pattern">匹配条件</label>
-              <input autoFocus id="rule-pattern" value={newRule.pattern} onChange={(e) => setNewRule({ ...newRule, pattern: e.target.value })} placeholder={newRule.match_type === "extension" ? "xlsx（或 .xlsx）" : newRule.match_type === "filename" ? "XXL-JOB配置.xlsx" : newRule.match_type === "glob" ? "*xxl*.{xlsx,docx,txt}" : "XXL-JOB"} />
-              <small>{newRule.match_type === "keyword" ? "只匹配文件名中的文字，不搜索文档正文。" : newRule.match_type === "extension" ? "每条填写一个后缀；xlsx、docx、txt 可分别添加，使用同一模板。" : "不区分大小写。高级 glob 可匹配相对路径及多个后缀。"}</small>
+              <input autoFocus id="rule-pattern" value={newRule.pattern} onChange={(e) => setNewRule({ ...newRule, pattern: e.target.value })} placeholder={newRule.match_type === "extension" ? "xlsx（或 .xlsx）" : newRule.match_type === "filename" ? "XXL-JOB配置.xlsx" : newRule.match_type === "glob" ? "*xxl*.{xlsx,doc,docx,txt}" : "XXL-JOB"} />
+              <small>{newRule.match_type === "keyword" ? "只匹配文件名中的文字，不搜索文档正文。" : newRule.match_type === "extension" ? "每条填写一个后缀；xlsx、doc、docx、txt 可分别添加，使用同一模板。" : "不区分大小写。高级 glob 可匹配相对路径及多个后缀。"}</small>
             </div>
             <div className="field"><label htmlFor="rule-system">归属系统</label>
               <select id="rule-system" value={newRule.system} onChange={(e) => setNewRule({ ...newRule, system: e.target.value, template_id: systems.find((sys) => sys.id === e.target.value)?.default_template_id ?? newRule.template_id })}>

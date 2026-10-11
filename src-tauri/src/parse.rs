@@ -17,7 +17,7 @@ pub fn kind_for(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
         "json" => "json",
         "xlsx" | "xls" | "xlsm" | "xlsb" => "excel",
-        "docx" => "word",
+        "doc" | "docx" => "word",
         "txt" | "md" | "log" | "conf" | "properties" | "yml" | "yaml" | "xml" | "ini" | "csv" => {
             "text"
         }
@@ -133,6 +133,19 @@ fn cell_to_string(cell: &Data) -> String {
 }
 
 fn parse_word(path: &Path, threshold: usize, chunk_size: usize) -> Result<Parsed, String> {
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("doc"))
+    {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        return Ok(finish(
+            legacy_doc_text(&bytes)?,
+            threshold,
+            chunk_size,
+            false,
+            None,
+        ));
+    }
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     let mut xml = String::new();
@@ -142,6 +155,59 @@ fn parse_word(path: &Path, threshold: usize, chunk_size: usize) -> Result<Parsed
         .read_to_string(&mut xml)
         .map_err(|e| e.to_string())?;
     Ok(finish(docx_text(&xml)?, threshold, chunk_size, false, None))
+}
+
+/// 只提取 Word 97–2003 正文；按文档结构保留重复段落与表格单元格。
+/// 不使用库的 flat text 路径，因为该路径会合并连续重复正文。
+pub fn legacy_doc_text(bytes: &[u8]) -> Result<String, String> {
+    let document = rwml::Document::open(bytes).map_err(|e| match e {
+        rwml::Error::Encrypted { .. } => "DOC 已加密，请在 Word 中解密后另存再导入".into(),
+        rwml::Error::UnsupportedVersion(_) => {
+            "暂不支持 Word 6/95，请另存为 Word 97–2003 DOC 或 DOCX".into()
+        }
+        rwml::Error::NotOle2 | rwml::Error::Docx(_) => {
+            "文件不是 Word 97–2003 二进制 DOC，请另存为 DOCX 后导入".into()
+        }
+        _ => format!("DOC 解析失败，文件可能已损坏：{e}"),
+    })?;
+    let model = document.model();
+    let mut out = String::new();
+    for region in model.source_regions(rwml::SourceRegionKind::Main) {
+        legacy_blocks_text(model.source_region_blocks(region), &mut out);
+    }
+    let text = out.trim().to_string();
+    if text.is_empty() {
+        return Err("DOC 未提取到可评审正文；图片和嵌入对象不支持 OCR".into());
+    }
+    Ok(text)
+}
+
+fn legacy_blocks_text(blocks: &[rwml::Block], out: &mut String) {
+    for block in blocks {
+        match block {
+            rwml::Block::Paragraph(paragraph) => {
+                out.push_str(paragraph.text().trim_end_matches(['\r', '\n', '\u{7}']));
+                out.push('\n');
+            }
+            rwml::Block::Table(table) => {
+                for row in &table.rows {
+                    let cells: Vec<String> = row
+                        .cells
+                        .iter()
+                        .map(|cell| {
+                            let mut text = String::new();
+                            legacy_blocks_text(&cell.blocks, &mut text);
+                            text.trim_end().replace('\n', " / ")
+                        })
+                        .collect();
+                    out.push_str(&cells.join(" | "));
+                    out.push('\n');
+                }
+            }
+            rwml::Block::PageBreak => out.push('\n'),
+            _ => {}
+        }
+    }
 }
 
 /// 从 WordprocessingML 中抽取文本：段落换行 + 去标签 + 实体解码。

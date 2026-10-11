@@ -74,7 +74,7 @@ pub fn default_rule_sets() -> Vec<RuleSet> {
             rule("r-apollo", "*apollo*.json", "apollo", "tpl-apollo"),
             rule("r-xxl-json", "*xxl-job*.json", "xxl", "tpl-xxl"),
             rule("r-xxl-xlsx", "job-config-*.xlsx", "xxl", "tpl-xxl"),
-            rule("r-xxl-docx", "*操作手册*.docx", "xxl", "tpl-xxl"),
+            rule("r-xxl-docx", "*操作手册*.{doc,docx}", "xxl", "tpl-xxl"),
             rule("r-nebula", "星云/**", "nebula", "tpl-nebula"),
         ],
     }]

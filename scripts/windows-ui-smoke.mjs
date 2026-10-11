@@ -1,7 +1,7 @@
 // Windows runner 上启动真实已安装 EXE / WebView2；仅文件保存对话框返回值被替换。
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -11,14 +11,19 @@ const executable = process.argv[2];
 if (!executable) throw new Error('Expected installed EXE path');
 const root = await mkdtemp(path.join(tmpdir(), 'reviewer-ui-'));
 const inputs = path.join(root, '中文发布包'); await mkdir(inputs);
-await writeFile(path.join(inputs, 'APOLLO-config.JSON'), '{"retry":3}', 'utf8');
-const reply = '有条件通过\n【依据】\n- 已配置重试\n【风险】\n- 缺少监控告警\n【整改项】\n- 补充告警阈值\n引用：$.retry | 3';
+await copyFile(path.resolve('src-tauri/tests/fixtures/legacy-word.doc'), path.join(inputs, 'XXL操作手册.DOC'));
+let docReviewReceived = false;
+const reply = '有条件通过\n【依据】\n- 已配置重试\n【风险】\n- 缺少监控告警\n【整改项】\n- 补充告警阈值\n引用：订单同步 | orderSyncJob | 3';
 let requestCount = 0;
 const server = http.createServer(async (req, res) => {
   let body = ''; for await (const piece of req) body += piece;
   const value = JSON.parse(body); assert.equal(req.headers.authorization, 'Bearer mock-key'); requestCount++;
   const connectivity = value.messages[0].content.includes('回复两个字');
   const text = connectivity ? '可用' : reply;
+  if (!connectivity) {
+    assert.ok(body.includes('orderSyncJob') && body.includes('订单同步'), 'DOC content must reach the gateway');
+    docReviewReceived = true;
+  }
   if (!connectivity) await new Promise(resolve => setTimeout(resolve, 1500));
   if (value.stream) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -67,9 +72,9 @@ try {
   await page.getByRole('button', { name: '扫描本地目录', exact: true }).click();
   await page.locator('input[placeholder*="2026Q3-mixed"]').fill(inputs);
   await page.getByRole('button', { name: '下一步：扫描解析 →', exact: true }).click();
-  await page.getByText('APOLLO-config.JSON', { exact: true }).first().waitFor();
+  await page.getByText('XXL操作手册.DOC', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: '预览', exact: true }).click();
-  assert.match(await page.locator('.preview-box').textContent().catch(() => page.locator('body').textContent()), /retry/);
+  assert.match(await page.locator('.preview-box').textContent().catch(() => page.locator('body').textContent()), /orderSyncJob/);
   await page.getByRole('button', { name: '下一步：评审配置 →', exact: true }).click();
   await page.getByRole('button', { name: '开始评审', exact: true }).click();
   await page.getByRole('heading', { name: '确认数据去向' }).waitFor();
@@ -121,7 +126,7 @@ try {
   await page.getByRole('button', { name: /评审历史/ }).click();
   await page.getByText(inputs, { exact: false }).waitFor();
   await page.getByRole('button', { name: '查看', exact: true }).click();
-  await page.getByText('APOLLO-config.JSON', { exact: true }).first().waitFor();
+  await page.getByText('XXL操作手册.DOC', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: /模型与规则/ }).click();
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await page.getByText('连接正常：可用', { exact: true }).waitFor();
@@ -139,9 +144,10 @@ try {
   await page.getByText('已取消', { exact: true }).waitFor();
   await page.getByRole('button', { name: /重试失败项/ }).click();
   await page.getByText('评审完成', { exact: true }).waitFor();
+  assert.ok(docReviewReceived);
   assert.equal(errors.length, 0, errors.join('\n')); assert.ok(requestCount >= 5);
   await writeFile(path.join(artifacts, 'result.json'), JSON.stringify({ passed: true, requestCount,
-    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'scan preview', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history', 'GUI cancellation and retry'],
+    checked: ['installed EXE', 'WebView2', 'settings and key persistence', 'stream connection', 'Chinese directory', 'legacy DOC Chinese body and table preview', 'DOC content sent to gateway', 'review', 'overlapping review/scan rejection', 'details', 'four report exports', 'restart history', 'GUI cancellation and retry'],
     limitation: 'Save dialog response was stubbed; other Tauri IPC and file writes used the real installed application.' }, null, 2));
   console.log('Windows installed application UI smoke passed');
 } catch (error) {
