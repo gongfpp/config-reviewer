@@ -23,7 +23,7 @@ npm run check:rust     # Rust 检查
 cargo test --locked --manifest-path src-tauri/Cargo.toml # 回归测试
 ```
 
-Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https://github.com/gongfpp/config-reviewer-builds) 由 GitHub Actions 构建，内置完整 WebView2 离线安装器，并静态链接 MSVC CRT。交付物是 `ConfigReviewer-0.1.4-windows-x64-offline.zip`，含安装 EXE、独立主程序 EXE、安装说明、环境检查脚本及 SHA256 清单。运行端无需 Node、Rust、Office 或外网连接。私有源码仅以一次性 AES-GCM 加密包进入 runner，不公开明文。
+Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https://github.com/gongfpp/config-reviewer-builds) 由 GitHub Actions 构建，内置完整 WebView2 离线安装器，并静态链接 MSVC CRT。交付物是 `ConfigReviewer-0.1.4-windows-x64-offline.zip`，含安装 EXE、独立主程序 EXE、安装说明、环境检查脚本及 SHA256 清单。运行端无需 Node、Rust、Office 或外网连接。源码仓库公开后，原有一次性 AES-GCM 构建输入流程继续可用。
 
 源码提交并通过本地检查后，可运行 `python3 scripts/dispatch-public-build.py`（需要已登录的 `gh` 与 Python `cryptography`）派发 public Windows 构建。脚本拒绝脏工作区和重叠构建，密钥仅通过 stdin 写入仓库 Secret；交付完成后删除临时输入和 Secret。Windows UI 验收依赖由 `scripts/package.json` 单独固定，不进入运行端。
 
@@ -82,3 +82,7 @@ Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https:
 OpenCode Go 可作为外部配置评审模型：设置其 Base URL 和账号提供的模型名、API Key，应用发送自己的 User-Agent 和每任务稳定的会话头。依据 [Go 客户端要求](https://opencode.ai/docs/go/#where-can-i-use-it)，会话头仅对 `opencode.ai/zen/go/` 发送。模型服务和内网真实数据的使用范围由使用者选择。
 
 `scripts/generate-xxl-fixtures.mjs` 生成模拟 XXL-JOB 发布资料，字段来源固定为官方 v3.4.0 提交；输出真实 BIFF8 `.xls` 和 OOXML `.xlsx`。需要 artifact-tool 运行时，以及 Python `xlwt`、`xlrd`、`openpyxl`。生成后会核对两种格式全部单元格、文件签名与 SHA256，人工答案保存在扫描目录外。样例和输出位置为 `artifacts/acceptance-0.1.4/`，不含任何真实账号、业务地址或凭据。
+
+## 公开范围与本地数据
+
+仓库提供源码、虚构测试样例和开发文档。个人模型凭据、应用设置、评审数据库、原始业务资料、生成报告和本地交付物应保留在仓库外；常见凭据文件和本地应用数据已加入 `.gitignore`。忽略规则不能清除既有 Git 历史，公开前检查记录见 [公开前隐私检查](docs/public-privacy-audit.md)。

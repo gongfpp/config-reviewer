@@ -30,3 +30,23 @@ tools/
 __pycache__/
 *.pyc
 ready-to-run/
+
+# Local credentials and environment settings
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials.json
+
+# Local application data and generated build metadata
+.build-source.json
+config.json
+config.json.bak
+reviewer.db
+reviewer.db-*
