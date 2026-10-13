@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use futures_util::future::join_all;
+use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Semaphore;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub workspace_root: PathBuf,
     pub config_path: PathBuf,
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub shutting_down: AtomicBool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,11 +84,14 @@ pub fn clear_api_key() -> Result<(), String> {
 }
 
 /// 原子登记扫描/评审，异步后仍保持互斥，避免清理正在使用的工作区。
-fn reserve_task(state: &AppState, task_id: &str) -> Result<Arc<AtomicBool>, String> {
+pub(crate) fn reserve_task(state: &AppState, task_id: &str) -> Result<Arc<AtomicBool>, String> {
     let mut active = state
         .cancels
         .lock()
         .map_err(|_| "任务状态不可用".to_string())?;
+    if state.shutting_down.load(Ordering::Relaxed) {
+        return Err("程序正在退出，请稍后重新打开。".into());
+    }
     if !active.is_empty() {
         return Err("扫描或评审正在运行，请先取消或等待完成。".into());
     }
@@ -305,6 +310,7 @@ async fn run_scan(
                 worker_id,
                 workspace.clone(),
                 entries,
+                progress.discovered,
                 rule_set,
                 &cfg,
             )
@@ -344,28 +350,21 @@ fn scan_opts(
         threshold: threshold.max(1000),
         chunk_size: chunk_size.max(500),
         max_file_bytes: cfg.max_file_mb.saturating_mul(1024 * 1024),
-        max_files: cfg.max_files,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_result(
     source_type: &str,
     source_ref: &str,
     task_id: String,
     workspace: PathBuf,
     entries: Vec<ScanEntry>,
+    discovered: usize,
     rule_set: RuleSet,
     cfg: &AppConfig,
 ) -> Result<ScanResult, String> {
-    if entries.len() > cfg.max_files {
-        let _ = std::fs::remove_dir_all(&workspace);
-        return Err(format!(
-            "文件数 {} 超过上限 {}",
-            entries.len(),
-            cfg.max_files
-        ));
-    }
-    let total_files = entries.len() as u64;
+    let total_files = discovered as u64;
     let matched_files = entries.iter().filter(|e| e.matched).count() as u64;
     let total_bytes = entries.iter().map(|e| e.size).sum();
     Ok(ScanResult {
@@ -445,7 +444,7 @@ fn fresh_workspace(root: &PathBuf, task_id: &str) -> Result<PathBuf, String> {
     Ok(workspace)
 }
 
-async fn run_review_inner(
+pub(crate) async fn run_review_inner(
     app: &AppHandle,
     _state: &AppState,
     request: &ReviewRequest,
@@ -493,33 +492,44 @@ async fn run_review_inner(
         .await;
         all.push(result);
     } else {
-        let futures = request.files.iter().enumerate().map(|(index, file)| {
-            let app = app.clone();
-            let cfg = cfg.clone();
-            let sem = sem.clone();
-            let cancel = cancel.clone();
-            let task_id = task_id.to_string();
-            let output_format = file.output_format.clone();
-            async move {
-                review_one(
-                    &app,
-                    &cfg,
-                    file,
-                    threshold,
-                    chunk_size,
-                    &output_format,
-                    &task_id,
-                    index,
-                    total,
-                    retry_count,
-                    &sem,
-                    cancel,
-                )
-                .await
-            }
-        });
-        let results = join_all(futures).await;
-        all.extend(results);
+        let futures = request
+            .files
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, file)| {
+                let app = app.clone();
+                let cfg = cfg.clone();
+                let sem = sem.clone();
+                let cancel = cancel.clone();
+                let task_id = task_id.to_string();
+                let output_format = file.output_format.clone();
+                async move {
+                    let result = review_one(
+                        &app,
+                        &cfg,
+                        &file,
+                        threshold,
+                        chunk_size,
+                        &output_format,
+                        &task_id,
+                        index,
+                        total,
+                        retry_count,
+                        &sem,
+                        cancel,
+                    )
+                    .await;
+                    (index, result)
+                }
+            });
+        // 限制整个文件的在途数量，避免移除数量上限后大量解析文本同时驻留内存。
+        let mut results = stream::iter(futures)
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+            .await;
+        results.sort_by_key(|(index, _)| *index);
+        all.extend(results.into_iter().map(|(_, result)| result));
     }
 
     let cancelled = cancel.load(Ordering::Relaxed);
@@ -1047,10 +1057,11 @@ fn emit(
         delta: delta.map(str::to_string),
         result,
     };
+    crate::scheduler::observe_review(app, &payload);
     let _ = app.emit("review://progress", payload);
 }
 
-fn tally(results: &[FileResult]) -> (u64, u64, u64, u64) {
+pub(crate) fn tally(results: &[FileResult]) -> (u64, u64, u64, u64) {
     let (mut pass, mut conditional, mut block, mut fail) = (0, 0, 0, 0);
     for r in results {
         if r.error.is_some() {
@@ -1200,6 +1211,7 @@ mod task_tests {
             workspace_root: PathBuf::new(),
             config_path: PathBuf::new(),
             cancels: Mutex::new(HashMap::new()),
+            shutting_down: AtomicBool::new(false),
         };
         let flag = reserve_task(&state, "scan").unwrap();
         assert!(reserve_task(&state, "review").is_err());
@@ -1213,6 +1225,10 @@ mod task_tests {
             .store(true, Ordering::Relaxed);
         assert!(flag.load(Ordering::Relaxed));
         state.cancels.lock().unwrap().remove("scan");
-        assert!(reserve_task(&state, "next").is_ok());
+        assert!(reserve_task(&state, "scheduled").is_ok());
+        assert!(reserve_task(&state, "manual").is_err());
+        state.cancels.lock().unwrap().clear();
+        state.shutting_down.store(true, Ordering::Relaxed);
+        assert!(reserve_task(&state, "after-quit").is_err());
     }
 }

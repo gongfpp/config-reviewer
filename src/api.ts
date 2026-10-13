@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppConfig,
+  ScheduleConfig,
+  ScheduledJob,
   Defaults,
   ExportRow,
   GatewayConfig,
@@ -94,3 +96,9 @@ export const deleteHistory = (id: string) => invoke<void>("delete_history", { id
 export const exportText = (path: string, content: string) => invoke<void>("export_text", { path, content });
 
 export const cancelScan = (taskId: string) => invoke<void>("cancel_scan", { taskId });
+
+export const listSchedules = () => invoke<ScheduledJob[]>("list_schedules");
+export const saveSchedule = (config: ScheduleConfig) => invoke<void>("save_schedule", { config });
+export const deleteSchedule = (id: string) => invoke<void>("delete_schedule", { id });
+export const runScheduleNow = (id: string) => invoke<void>("run_schedule_now", { id });
+export const cancelSchedule = (id: string) => invoke<void>("cancel_schedule", { id });

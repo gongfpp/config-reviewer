@@ -13,6 +13,9 @@ foreach ($root in @('HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients','HKLM:\SOFTWAR
 }
 if ($runtime.Count) { $runtime | ForEach-Object { Write-Output "WebView2: $($_.pv)" } }
 else { Write-Output 'WebView2: not detected. Use the offline setup EXE to install it.' }
+$git = Get-Command git -ErrorAction SilentlyContinue
+if ($git) { Write-Output "Git (optional for scheduled pull): $(& $git.Source --version)" }
+else { Write-Output 'Git: not found. Install Git and add it to PATH to enable scheduled pull; ordinary directory review still works.' }
 Write-Output "User data directory: $env:APPDATA"
 if (-not $BaseUrl) { return }
 $uri = [Uri]$BaseUrl

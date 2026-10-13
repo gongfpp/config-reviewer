@@ -182,7 +182,6 @@ export interface AppConfig {
   stream_enabled: boolean;
   concurrency: number;
   max_file_mb: number;
-  max_files: number;
   chunk_threshold: number;
   chunk_size: number;
   retry_count: number;
@@ -213,9 +212,50 @@ export interface SystemFileSummary {
 export interface ScanProgress {
   task_id: string;
   phase: "discover" | "extract" | "parse" | "done";
+  extract_processed: number;
+  extract_total: number | null;
   discovered: number;
   processed: number;
   total: number | null;
   matched: number;
   current: string;
+}
+
+export interface ScheduleConfig {
+  id: string;
+  name: string;
+  directory: string;
+  interval_minutes: number;
+  enabled: boolean;
+  git_pull: boolean;
+  only_changed: boolean;
+  rule_set_id: string;
+}
+
+export interface ScheduleRun {
+  task_id: string;
+  started_at: number;
+  finished_at: number | null;
+  state: string;
+  phase: string;
+  processed: number;
+  total: number | null;
+  discovered: number;
+  matched: number;
+  current: string;
+  message: string;
+  before_commit: string;
+  after_commit: string;
+  history_id: string | null;
+  pass: number;
+  conditional: number;
+  block: number;
+  fail: number;
+}
+
+export interface ScheduledJob {
+  config: ScheduleConfig;
+  next_run_at: number | null;
+  last_run: ScheduleRun | null;
+  last_fingerprint: string;
 }

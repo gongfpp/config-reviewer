@@ -25,7 +25,6 @@ pub struct AppConfig {
 
     pub concurrency: usize,
     pub max_file_mb: u64,
-    pub max_files: usize,
     pub chunk_threshold: usize,
     pub chunk_size: usize,
     #[serde(default = "default_retry")]
@@ -68,7 +67,6 @@ impl Default for AppConfig {
             stream_enabled: true,
             concurrency: 3,
             max_file_mb: 1228,
-            max_files: 800,
             chunk_threshold: 12000,
             chunk_size: 8000,
             retry_count: 1,

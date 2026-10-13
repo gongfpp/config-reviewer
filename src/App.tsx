@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 import ReviewModules from "./ReviewModules";
+import Schedules from "./Schedules";
 import * as api from "./api";
 import type {
   AppConfig,
@@ -19,6 +20,7 @@ import type {
   ScanEntry,
   ScanResult,
   ScanProgress,
+  ScheduledJob,
   SystemFileSummary,
   TaskDetail,
   TaskSummary,
@@ -52,7 +54,7 @@ function recomputeSummary(taskId: string, results: FileResult[], cancelled: bool
   return { task_id: taskId, results, pass, conditional, block, fail, cancelled };
 }
 
-type View = "task" | "history" | "templates" | "settings";
+type View = "task" | "history" | "templates" | "settings" | "schedules";
 
 function kindLabel(kind: string) {
   switch (kind) {
@@ -124,6 +126,10 @@ export default function App() {
   const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
 
+  const [schedules, setSchedules] = useState<ScheduledJob[]>([]);
+  const [scheduleError, setScheduleError] = useState("");
+  const activeSchedule = schedules.find(j => j.last_run?.state === "running");
+
   const [history, setHistory] = useState<TaskSummary[]>([]);
   const [historyDetail, setHistoryDetail] = useState<TaskDetail | null>(null);
   const [historySearch, setHistorySearch] = useState("");
@@ -159,6 +165,24 @@ export default function App() {
   useEffect(() => {
     refreshHistory();
   }, [refreshHistory]);
+
+  const refreshSchedules = useCallback(async () => {
+    try { setSchedules(await api.listSchedules()); setScheduleError(""); }
+    catch (e) { setScheduleError(String(e)); }
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void listen<ScheduledJob[]>("schedule://changed", ({ payload }) => {
+      if (disposed) return;
+      setSchedules(payload);
+      if (!payload.some(j => j.last_run?.state === "running")) refreshHistory();
+    }).then(fn => {
+      if (disposed) fn();
+      else { stop = fn; void refreshSchedules(); }
+    }).catch(e => { if (!disposed) setScheduleError(String(e)); });
+    return () => { disposed = true; stop?.(); };
+  }, [refreshHistory, refreshSchedules]);
 
   useEffect(() => {
     const unlisten = listen<ReviewProgress>("review://progress", (event) => {
@@ -279,7 +303,7 @@ export default function App() {
   };
 
   const doScan = async () => {
-    if (running || scanning) return toast("请先等待当前扫描或评审完成。");
+    if (running || scanning || activeSchedule) return toast("请先等待当前扫描、评审或定时任务完成。");
     if (!ruleSet || !appConfig) return;
     const requestId = crypto.randomUUID();
     activeScanRef.current = requestId;
@@ -294,7 +318,7 @@ export default function App() {
     setProgress({});
     setSummaries({});
     setReviewTotal(0);
-    setScanProgress({ task_id: requestId, phase: "discover", discovered: 0, processed: 0, total: null, matched: 0, current: "" });
+    setScanProgress({ task_id: requestId, phase: "discover", discovered: 0, processed: 0, total: null, matched: 0, current: "", extract_processed: 0, extract_total: null });
     let unlisten: (() => void) | undefined;
     try {
       await api.saveSettings(appConfig);
@@ -382,6 +406,7 @@ export default function App() {
 
   const runRequest = async (files: ReviewFileInput[]) => {
     if (!scan || !appConfig) throw new Error("任务未就绪");
+    if (activeSchedule) throw new Error("定时任务正在运行，请等待完成或到定时任务页面取消。");
     if (appConfig.granularity === "single" && new Set(files.map((f) => f.system)).size > 1) {
       throw new Error("合并评审仅支持同一模块的文件；多个模块请使用逐文件评审。");
     }
@@ -658,7 +683,7 @@ export default function App() {
 
   const reevalHistory = () => {
     if (!historyDetail) return;
-    if (historyDetail.summary.source_type !== "dir") {
+    if (!["dir", "scheduled"].includes(historyDetail.summary.source_type)) {
       toast("该来源为上传/文本，原始文件已清理，无法重评；请重新选择来源。");
       return;
     }
@@ -689,6 +714,8 @@ export default function App() {
     .map(([k, v]) => ({ index: Number(k), ...v }))
     .sort((a, b) => a.index - b.index);
   const doneCount = progressList.filter((p) => p.phase === "done").length;
+  const scanTotal = scanProgress?.phase === "extract" ? scanProgress.extract_total : scanProgress?.total;
+  const scanProcessed = (scanProgress?.phase === "extract" ? scanProgress.extract_processed : scanProgress?.processed) ?? 0;
 
   return (
     <div className="app">
@@ -703,6 +730,10 @@ export default function App() {
         <div className="nav-label">工作区</div>
         <button className={`nav-item ${view === "task" ? "is-active" : ""}`} onClick={() => setView("task")}>
           <span className="ico">✎</span>新建评审
+        </button>
+        <button className={`nav-item ${view === "schedules" ? "is-active" : ""}`} onClick={() => setView("schedules")}>
+          <span className="ico">◷</span>定时任务
+          {activeSchedule && <span className="badge">运行中</span>}
         </button>
         <button className={`nav-item ${view === "history" ? "is-active" : ""}`} onClick={() => setView("history")}>
           <span className="ico">≡</span>评审历史
@@ -733,12 +764,14 @@ export default function App() {
             <h1>
               {view === "task" && "新建评审"}
               {view === "history" && "评审历史"}
+              {view === "schedules" && "定时任务"}
               {view === "templates" && "评审模块"}
               {view === "settings" && "模型与运行"}
             </h1>
             <div className="sub">
               {view === "task" && "上传混合发布包 → 识别模块 → 分模块评审"}
               {view === "history" && "本机任务与文件级结果"}
+              {view === "schedules" && "按间隔更新资料、自动评审并保存报告"}
               {view === "templates" && "文件匹配 → 评审规范 → 模型输出"}
               {view === "settings" && "模型连接、凭据与运行容量"}
             </div>
@@ -747,6 +780,17 @@ export default function App() {
             <span className="chip good">Private Banking</span>
           </div>
         </header>
+
+        {activeSchedule && view !== "schedules" && <section className="scan-progress panel" role="status">
+          <div className="inline"><strong>定时任务运行中：{activeSchedule.config.name}</strong><span className="spacer" /><button className="btn btn-sm" onClick={() => setView("schedules")}>查看进度</button></div>
+        </section>}
+        {view === "schedules" && appConfig && <Schedules jobs={schedules} error={scheduleError} ruleSets={appConfig.rule_sets} defaultRuleSet={ruleSet?.id ?? ""} busy={running || scanning} refresh={refreshSchedules}
+          beforeSave={async () => {
+            await api.saveSettings(appConfig, apiKey || undefined);
+            if (apiKey) { setApiKey(""); setHasKey(true); }
+            setConfigDirty(false);
+          }}
+          openHistory={id => { setView("history"); refreshHistory(); void viewHistory(id); }} />}
 
         {(connectionTesting || exporting || summarizing) && <section className="scan-progress panel" role="status">
           <strong>{[connectionTesting ? "正在测试模型连接…" : "", exporting ? "正在导出报告…" : "", summarizing ? `正在生成 ${systemName(summarizing)} 汇总…` : ""].filter(Boolean).join(" · ")}</strong>
@@ -762,10 +806,9 @@ export default function App() {
               {!scanning && <button className="btn btn-sm" onClick={() => setScanError("")}>关闭</button>}
             </div>
             {scanning && <>
-              <progress aria-label="扫描解析进度" max={scanProgress?.total || 1} value={scanProgress?.total == null ? undefined : scanProgress.total === 0 ? 1 : scanProgress.processed} />
-              <div className="muted" aria-live="polite">
-                {scanProgress?.total == null ? `已发现 ${scanProgress?.discovered ?? 0} 个文件，正在统计总数` : `已处理 ${scanProgress.processed} / ${scanProgress.total} · 命中 ${scanProgress.matched} · ${scanProgress.total ? Math.round(scanProgress.processed / scanProgress.total * 100) : 100}%`}
-              </div>
+              <div className="scan-count-row" aria-live="polite"><strong className="progress-count">{scanTotal == null ? `已发现 ${scanProgress?.discovered ?? 0} 个文件` : `${scanProcessed} / ${scanTotal}`}</strong><span className="muted">{scanTotal == null ? "正在统计总数…" : `${scanProgress?.phase === "extract" ? "解压条目" : "文件已处理"} · ${scanTotal ? Math.round(scanProcessed / scanTotal * 100) : 100}%`}</span></div>
+              <progress aria-label="扫描解析进度" max={scanTotal || 1} value={scanTotal == null ? undefined : scanTotal === 0 ? 1 : scanProcessed} />
+              <div className="muted">已发现 {scanProgress?.discovered ?? 0} 个文件 · 命中 {scanProgress?.matched ?? 0} 个</div>
               <div className="scan-current" title={scanProgress?.current}>{scanProgress?.current || "准备工作区…"}</div>
               {scanCancelling && <small>将在当前文档解析返回后停止；ZIP 解压会在读取分段间停止。</small>}
             </>}
@@ -800,7 +843,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <h2>选择评审来源</h2>
-                  <span className="hint">文件数 &lt; {appConfig.max_files} · 单文件 ≤ {appConfig.max_file_mb} MB</span>
+                  <span className="hint">不限制文件数量 · 单文件 ≤ {appConfig.max_file_mb} MB</span>
                 </div>
                 <div className="panel-body">
                   <div className="src-tabs">
@@ -1083,7 +1126,7 @@ export default function App() {
                       <strong style={{ fontFamily: "var(--heading-font)", fontStyle: "italic" }}>
                         {running ? reviewStage : summary?.cancelled ? "已取消" : summary ? "评审完成" : "等待开始评审"}
                       </strong>
-                      <span className="muted" style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12 }}>
+                      <span className="progress-count" style={{ marginLeft: "auto" }}>
                         {Math.min(doneCount, reviewTotal)} / {reviewTotal}
                       </span>
                       {running && <button className="btn btn-sm" style={{ marginLeft: 12 }} onClick={cancelReview}>取消评审</button>}
@@ -1174,7 +1217,7 @@ export default function App() {
                         </div>
                         <div className="panel-body">
                           {progressList.length === 0 && <div className="empty">等待模型返回…</div>}
-                          {progressList.map((p) => (
+                          {progressList.filter(p => p.phase !== "done").map((p) => (
                             <div key={p.index} style={{ marginBottom: 10 }}>
                               <div className="muted" style={{ fontSize: 12 }}>
                                 {p.file} · {({ parse: "解析资料", waiting: "等待模型", analyze: "生成评审", chunk: "分块评审", merge: "合并结果", done: "已完成" } as Record<string, string>)[p.phase] ?? "评审中"}
@@ -1298,7 +1341,7 @@ export default function App() {
                   {filteredHistory.length === 0 && (
                     <tr>
                       <td colSpan={6} className="empty">
-                        {history.length === 0 ? "暂无历史。成功评审才会入库。" : "没有匹配的记录。"}
+                        {history.length === 0 ? "暂无历史。完成的评审结果会保存在这里。" : "没有匹配的记录。"}
                       </td>
                     </tr>
                   )}
@@ -1306,7 +1349,7 @@ export default function App() {
                     <tr key={h.id}>
                       <td>{formatTime(h.created_at)}</td>
                       <td>
-                        {h.source_type === "dir" ? "目录 · " : h.source_type === "text" ? "文本 · " : "文件 · "}
+                        {h.source_type === "scheduled" ? "定时任务 · " : h.source_type === "dir" ? "目录 · " : h.source_type === "text" ? "文本 · " : "文件 · "}
                         {h.source_ref}
                       </td>
                       <td>
@@ -1435,10 +1478,6 @@ export default function App() {
                     </div>
                   </div>
                   <div className="field-row">
-                    <div className="field">
-                      <label htmlFor="setting-7">最大文件数</label>
-                      <input id="setting-7" type="number" value={appConfig.max_files} onChange={(e) => updateConfig({ max_files: Number(e.target.value) || 800 })} />
-                    </div>
                     <div className="field">
                       <label htmlFor="setting-8">历史保留（天，0=永久）</label>
                       <input id="setting-8" type="number" value={appConfig.history_retention_days} onChange={(e) => updateConfig({ history_retention_days: Number(e.target.value) || 0 })} />

@@ -98,7 +98,6 @@ fn opts() -> scan::ScanOptions {
         threshold: 12000,
         chunk_size: 8000,
         max_file_bytes: 1024 * 1024,
-        max_files: 800,
     }
 }
 fn zip_fixture(path: &std::path::Path, files: &[(&str, &[u8])]) {
@@ -339,10 +338,19 @@ fn zip_traversal_and_limits_and_duplicates_are_rejected() {
     let mut small = opts();
     small.max_file_bytes = 4;
     assert!(scan::extract_zip(&path, &temp.path().join("out"), &small).is_err());
-    zip_fixture(&path, &[("a.txt", b"x"), ("b.txt", b"x")]);
-    small = opts();
-    small.max_files = 1;
-    assert!(scan::extract_zip(&path, &temp.path().join("out"), &small).is_err());
+    zip_fixture(
+        &path,
+        &[
+            ("a.txt", b"1234"),
+            ("b.txt", b"1234"),
+            ("c.txt", b"1234"),
+            ("d.txt", b"1234"),
+            ("e.txt", b"1234"),
+        ],
+    );
+    assert!(scan::extract_zip(&path, &temp.path().join("out"), &small)
+        .unwrap_err()
+        .contains("解压总量"));
 }
 #[test]
 fn same_named_packages_are_distinct() {
@@ -786,20 +794,28 @@ fn scan_reports_real_totals_and_can_cancel_before_parsing() {
 }
 
 #[test]
-fn scan_enforces_total_limit_even_when_no_rules_match() {
+fn unmatched_large_scan_counts_every_file_without_a_file_limit() {
     let temp = tempfile::tempdir().unwrap();
-    std::fs::write(temp.path().join("a.txt"), "a").unwrap();
-    std::fs::write(temp.path().join("b.txt"), "b").unwrap();
+    for i in 0..1001 {
+        std::fs::write(temp.path().join(format!("unmatched-{i}.txt")), "a").unwrap();
+    }
     let mut options = opts();
-    options.max_files = 1;
     options.matched_only = true;
-    let result = scan::scan_directory(
+    let mut progress = scan::initial_progress("unmatched".into());
+    let entries = scan::scan_directory_with_progress(
         temp.path(),
         &rules::default_rule_sets()[0],
         &temp.path().join("work"),
         &options,
-    );
-    assert!(result.unwrap_err().contains("超过上限"));
+        &mut progress,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert!(entries.is_empty());
+    assert_eq!(progress.discovered, 1001);
+    assert_eq!(progress.processed, 1001);
+    assert_eq!(progress.total, Some(1001));
+    assert_eq!(progress.matched, 0);
 }
 
 #[test]
@@ -1224,4 +1240,167 @@ fn bang_row_locators_are_extracted_without_repeated_marker_but_narrative_is_not(
     );
     assert_eq!(result.citations[2].locator, "高级配置!第8行");
     assert_eq!(result.citations[2].snippet, "9003 | ROUND | 300 | 2");
+}
+
+#[test]
+fn large_directory_and_multiple_uploads_have_exact_counts_without_git_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("repo");
+    std::fs::create_dir_all(dir.join(".git/objects")).unwrap();
+    std::fs::create_dir_all(dir.join("worktree")).unwrap();
+    std::fs::write(dir.join(".git/objects/apollo-private.json"), "{}").unwrap();
+    std::fs::write(dir.join("worktree/.git"), "gitdir: ../.git/worktrees/test").unwrap();
+    std::fs::write(dir.join(".gitignore"), "target").unwrap();
+    std::fs::write(dir.join(".gitmodules"), "test").unwrap();
+    let mut paths = Vec::new();
+    for i in 0..1001 {
+        let path = dir.join(format!("apollo-{i:04}.json"));
+        std::fs::write(&path, "{\"timeout\":30}").unwrap();
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    let mut progress = scan::initial_progress("directory".into());
+    let entries = scan::scan_directory_with_progress(
+        &dir,
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut progress,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1003);
+    assert_eq!(progress.discovered, 1003);
+    assert_eq!(progress.processed, 1003);
+    assert_eq!(progress.total, Some(1003));
+    assert_eq!(progress.matched, 1001);
+    assert!(entries
+        .iter()
+        .all(|entry| !entry.path.starts_with(".git/") && entry.name != ".git"));
+    assert!(entries.iter().any(|entry| entry.name == ".gitignore"));
+    assert!(entries.iter().any(|entry| entry.name == ".gitmodules"));
+    paths.push(
+        dir.join(".git/objects/apollo-private.json")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    paths.push(dir.join("worktree/.git").to_string_lossy().into_owned());
+    let mut uploaded = scan::initial_progress("uploads".into());
+    let entries = scan::scan_uploads_with_progress(
+        &paths,
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut uploaded,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1001);
+    assert_eq!(uploaded.discovered, 1001);
+    assert_eq!(uploaded.processed, 1001);
+    assert_eq!(uploaded.total, Some(1001));
+    assert!(entries.iter().all(|entry| entry.parse_status == "ok"));
+}
+
+#[test]
+fn large_zip_has_exact_extraction_and_parse_counts_without_git_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("large.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.add_directory("configs/", SimpleFileOptions::default())
+        .unwrap();
+    for i in 0..1001 {
+        zip.start_file(
+            format!("configs/apollo-{i:04}.json"),
+            SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"{\"timeout\":30}").unwrap();
+    }
+    for name in [
+        ".git/config",
+        "worktree/.git",
+        "nested/.GIT/objects/apollo-secret.json",
+        "windows\\.git\\config",
+    ] {
+        zip.start_file(name, SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"metadata").unwrap();
+    }
+    zip.finish().unwrap();
+    let mut progress = scan::initial_progress("large-zip".into());
+    let mut extract_events = Vec::new();
+    let entries = scan::scan_uploads_with_progress(
+        &[path.to_string_lossy().into_owned()],
+        &rules::default_rule_sets()[0],
+        &temp.path().join("work"),
+        &opts(),
+        &mut progress,
+        &mut |p| {
+            if p.phase == "extract" {
+                extract_events.push(p.clone());
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1001);
+    assert_eq!(progress.discovered, 1001);
+    assert_eq!(progress.processed, 1001);
+    assert_eq!(progress.total, Some(1001));
+    assert!(entries.iter().all(|entry| entry.parse_status == "ok"));
+    assert!(extract_events
+        .iter()
+        .any(|p| p.extract_total == Some(1001) && p.extract_processed == 0));
+    assert!(extract_events
+        .iter()
+        .any(|p| p.extract_total == Some(1001) && p.extract_processed == 1001));
+    assert!(extract_events
+        .iter()
+        .all(|p| p.processed == 0 && p.total.is_none()));
+    assert!(extract_events
+        .windows(2)
+        .all(|pair| pair[0].extract_processed <= pair[1].extract_processed));
+    let mut cancelled = scan::initial_progress("cancel-zip".into());
+    let cancel_workspace = temp.path().join("cancel-work");
+    let error = scan::scan_uploads_with_progress(
+        &[path.to_string_lossy().into_owned()],
+        &rules::default_rule_sets()[0],
+        &cancel_workspace,
+        &opts(),
+        &mut cancelled,
+        &mut |p| {
+            if p.extract_processed == 3 {
+                Err("扫描已取消".into())
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, "扫描已取消");
+    assert_eq!(cancelled.extract_processed, 3);
+    assert_eq!(cancelled.extract_total, Some(1001));
+    assert_eq!(
+        walkdir::WalkDir::new(&cancel_workspace)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn old_config_file_limit_is_ignored_and_not_saved_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.json");
+    let mut value = serde_json::to_value(config::AppConfig::default()).unwrap();
+    value["max_files"] = serde_json::json!(800);
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = config::load(&path);
+    config::save(&path, &loaded).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(saved.get("max_files").is_none());
+    assert_eq!(saved["max_file_mb"], value["max_file_mb"]);
+    value["max_files"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<config::AppConfig>(value).is_ok());
 }

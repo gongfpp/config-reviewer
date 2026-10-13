@@ -15,7 +15,6 @@ pub struct ScanOptions {
     pub threshold: usize,
     pub chunk_size: usize,
     pub max_file_bytes: u64,
-    pub max_files: usize,
 }
 
 /// 发现阶段尚不知道总数，解析阶段按实际文件数报告进度。
@@ -26,6 +25,9 @@ pub struct ScanProgress {
     pub discovered: usize,
     pub processed: usize,
     pub total: Option<usize>,
+    /// 当前 ZIP 解压的已完成文件数及预检后已知总数，不含目录和 .git 元数据。
+    pub extract_processed: usize,
+    pub extract_total: Option<usize>,
     pub matched: usize,
     pub current: String,
 }
@@ -39,6 +41,8 @@ pub fn initial_progress(task_id: String) -> ScanProgress {
         discovered: 0,
         processed: 0,
         total: None,
+        extract_processed: 0,
+        extract_total: None,
         matched: 0,
         current: String::new(),
     }
@@ -80,7 +84,9 @@ pub fn scan_directory_with_progress(
         .max_depth(max_depth)
         .into_iter()
         .filter_entry(|e| {
-            e.path() != workspace && (workspace_root == dir || e.path() != workspace_root)
+            !is_git_metadata(e.path())
+                && e.path() != workspace
+                && (workspace_root == dir || e.path() != workspace_root)
         })
     {
         observer(progress)?;
@@ -136,6 +142,9 @@ pub fn scan_uploads_with_progress(
     for (index, raw) in paths.iter().enumerate() {
         observer(progress)?;
         let path = PathBuf::from(raw);
+        if is_git_metadata(&path) {
+            continue;
+        }
         if !path.is_file() {
             return Err(format!("文件不存在或不可读取：{}", path.display()));
         }
@@ -155,6 +164,7 @@ pub fn scan_uploads_with_progress(
             observer,
         )?;
         if kind_for(ext_of(&path)) != "zip"
+            && candidates.len() > start
             && candidates[..start]
                 .iter()
                 .any(|c: &Candidate| c.display == name)
@@ -181,6 +191,8 @@ fn discover(
     observer: &mut Observer<'_>,
 ) -> Result<(), String> {
     progress.phase = "discover".into();
+    progress.extract_processed = 0;
+    progress.extract_total = None;
     progress.current = rel.into();
     observer(progress)?;
     if kind_for(ext_of(path)) == "zip" {
@@ -191,18 +203,15 @@ fn discover(
         );
         progress.phase = "extract".into();
         let base_count = candidates.len();
-        let remaining = ScanOptions {
-            max_files: opts.max_files.saturating_sub(base_count),
-            ..*opts
-        };
-        // 单包和所有来源共用文件数量上限。
         let extracted = extract_zip_with_progress(
             path,
             &workspace.join(&namespace),
-            &remaining,
-            &mut |name, count| {
+            opts,
+            &mut |name, count, total| {
                 progress.current = format!("{rel} / {name}");
                 progress.discovered = base_count + count;
+                progress.extract_processed = count;
+                progress.extract_total = total;
                 observer(progress)
             },
         )?;
@@ -214,9 +223,6 @@ fn discover(
             });
         }
     } else {
-        if candidates.len() >= opts.max_files {
-            return Err(format!("文件数超过上限 {}", opts.max_files));
-        }
         candidates.push(Candidate {
             abs: path.to_path_buf(),
             rel: rel.into(),
@@ -264,14 +270,16 @@ pub fn extract_zip(
     dest: &Path,
     opts: &ScanOptions,
 ) -> Result<Vec<(PathBuf, String)>, String> {
-    extract_zip_with_progress(zip_path, dest, opts, &mut |_, _| Ok(()))
+    extract_zip_with_progress(zip_path, dest, opts, &mut |_, _, _| Ok(()))
 }
+
+type ExtractionObserver<'a> = dyn FnMut(&str, usize, Option<usize>) -> Result<(), String> + 'a;
 
 fn extract_zip_with_progress(
     zip_path: &Path,
     dest: &Path,
     opts: &ScanOptions,
-    observer: &mut dyn FnMut(&str, usize) -> Result<(), String>,
+    observer: &mut ExtractionObserver<'_>,
 ) -> Result<Vec<(PathBuf, String)>, String> {
     let file = File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -282,9 +290,11 @@ fn extract_zip_with_progress(
         .max_file_bytes
         .saturating_mul(4)
         .min(2 * 1024 * 1024 * 1024);
+    let mut entries = Vec::new();
+    // 只读取 ZIP 目录元数据即可获取精确文件总数；同时在写入前验证路径和大小。
     for i in 0..archive.len() {
-        observer("", result.len())?;
-        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        observer("", 0, None)?;
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let rel = entry
             .enclosed_name()
             .ok_or_else(|| "ZIP 包含越界路径，已拒绝解压".to_string())?;
@@ -296,11 +306,8 @@ fn extract_zip_with_progress(
         {
             return Err("ZIP 含不兼容 Windows 的文件路径".into());
         }
-        if entry.is_dir() {
+        if entry.is_dir() || is_git_metadata(Path::new(&name)) {
             continue;
-        }
-        if result.len() >= opts.max_files {
-            return Err(format!("ZIP 文件数超过上限 {}", opts.max_files));
         }
         if !names.insert(name.to_lowercase()) {
             return Err("ZIP 含重复或仅大小写不同的文件路径".into());
@@ -314,24 +321,51 @@ fn extract_zip_with_progress(
         if total_bytes > total_limit {
             return Err("ZIP 解压总量超过上限（单文件上限的 4 倍，最高 2 GB）".into());
         }
+        entries.push((i, rel, name));
+    }
+    let total_files = entries.len();
+    observer("", 0, Some(total_files))?;
+    let mut written_total = 0u64;
+    for (index, rel, name) in entries {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        observer(&name, result.len(), Some(total_files))?;
         let out_path = dest.join(&rel);
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut out = File::create(&out_path).map_err(|e| e.to_string())?;
         let mut buffer = [0u8; 64 * 1024];
+        let mut written_file = 0u64;
         loop {
-            observer(&name, result.len())?;
+            observer(&name, result.len(), Some(total_files))?;
             let read = entry.read(&mut buffer).map_err(|e| e.to_string())?;
             if read == 0 {
                 break;
+            }
+            written_file += read as u64;
+            written_total += read as u64;
+            if written_file > opts.max_file_bytes {
+                return Err("ZIP 内文件超过单文件大小上限".into());
+            }
+            if written_total > total_limit {
+                return Err("ZIP 解压总量超过上限（单文件上限的 4 倍，最高 2 GB）".into());
             }
             out.write_all(&buffer[..read]).map_err(|e| e.to_string())?;
         }
         out.flush().map_err(|e| e.to_string())?;
         result.push((out_path, rel.to_string_lossy().replace('\\', "/")));
+        observer(&name, result.len(), Some(total_files))?;
     }
     Ok(result)
+}
+
+/// 包括 Git worktree 的 .git 文件；.gitignore、.gitmodules 等普通资料保留。
+fn is_git_metadata(path: &Path) -> bool {
+    path.components().any(|part| {
+        part.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(".git")
+    })
 }
 
 fn build_entry(abs: &Path, rel: &str, rule_set: &RuleSet, opts: &ScanOptions) -> Option<ScanEntry> {

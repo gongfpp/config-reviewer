@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "config-reviewer"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "calamine",
  "cfb 0.10.0",
@@ -683,6 +683,7 @@ dependencies = [
  "rwml",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
