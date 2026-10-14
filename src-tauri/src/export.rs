@@ -23,6 +23,11 @@ const HEADERS: [&str; 7] = [
     "时间",
 ];
 
+/// Excel 单元格上限 32,767 字符；超出会让整次导出以 MaxStringLengthExceeded 失败。
+fn cell(value: &str) -> String {
+    value.chars().take(32_767).collect()
+}
+
 pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
     let mut workbook = Workbook::new();
     let header_format = Format::new().set_bold();
@@ -49,7 +54,7 @@ pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
         .enumerate()
         {
             sheet
-                .write_string(r, col as u16, value.as_str())
+                .write_string(r, col as u16, cell(value))
                 .map_err(|e| e.to_string())?;
         }
     }

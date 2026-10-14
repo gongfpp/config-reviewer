@@ -575,6 +575,35 @@ async fn mixed_package_to_review_history_and_excel() {
     assert!(text.contains("$.retry"));
     assert!(chunk::char_len(&parsed.text) > 0);
 }
+
+/// 单条引用超 32,767 字符时，导出仍应成功并截断到 Excel 单元格上限。
+#[test]
+fn oversized_citation_is_truncated_to_excel_cell_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let report = temp.path().join("超长引用.xlsx");
+    let row = export::ExportRow {
+        system: "Apollo".into(),
+        file: "config/apollo.json".into(),
+        file_type: "JSON".into(),
+        rule: "*apollo*.json".into(),
+        verdict: "通过".into(),
+        citations: "引".repeat(33_000),
+        time: "2026-10-14".into(),
+    };
+    export::write_xlsx(report.to_str().unwrap(), &[row]).unwrap();
+    let text = parse::parse_file(&report, "excel", 12000, 8000)
+        .unwrap()
+        .text;
+    let citations = text
+        .lines()
+        .find(|line| line.contains("引引"))
+        .expect("导出文件里应能读回引用列")
+        .split(" | ")
+        .nth(6)
+        .expect("引用列应存在");
+    assert_eq!(citations.chars().count(), 32_767);
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_credential_store_round_trip() {
