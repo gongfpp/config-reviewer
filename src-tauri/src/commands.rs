@@ -1098,7 +1098,7 @@ pub async fn summarize_system(
 }
 
 #[tauri::command]
-pub async fn export_xlsx(path: String, rows: Vec<ExportRow>) -> Result<(), String> {
+pub async fn export_xlsx(path: String, rows: Vec<ExportRow>) -> Result<usize, String> {
     tauri::async_runtime::spawn_blocking(move || export::write_xlsx(&path, &rows))
         .await
         .map_err(|e| format!("导出工作线程异常：{e}"))?

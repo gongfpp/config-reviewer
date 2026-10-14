@@ -24,11 +24,14 @@ const HEADERS: [&str; 7] = [
 ];
 
 /// Excel 单元格上限 32,767 字符；超出会让整次导出以 MaxStringLengthExceeded 失败。
-fn cell(value: &str) -> String {
-    value.chars().take(32_767).collect()
+/// 返回截断后的文本与是否发生了截断，调用方据此提示用户，避免静默丢内容。
+fn cell(value: &str) -> (String, bool) {
+    let truncated = value.chars().count() > 32_767;
+    (value.chars().take(32_767).collect(), truncated)
 }
 
-pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
+/// 返回被截断的单元格数量；0 表示导出内容完整。
+pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<usize, String> {
     let mut workbook = Workbook::new();
     let header_format = Format::new().set_bold();
     let sheet = workbook.add_worksheet();
@@ -39,6 +42,7 @@ pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
             .write_string_with_format(0, col as u16, *header, &header_format)
             .map_err(|e| e.to_string())?;
     }
+    let mut truncated_cells = 0usize;
     for (i, row) in rows.iter().enumerate() {
         let r = (i + 1) as u32;
         for (col, value) in [
@@ -53,8 +57,12 @@ pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
         .iter()
         .enumerate()
         {
+            let (text, truncated) = cell(value);
+            if truncated {
+                truncated_cells += 1;
+            }
             sheet
-                .write_string(r, col as u16, cell(value))
+                .write_string(r, col as u16, text)
                 .map_err(|e| e.to_string())?;
         }
     }
@@ -66,5 +74,6 @@ pub fn write_xlsx(path: &str, rows: &[ExportRow]) -> Result<(), String> {
     sheet.set_column_width(5, 48).map_err(|e| e.to_string())?;
     sheet.set_column_width(6, 18).map_err(|e| e.to_string())?;
 
-    workbook.save(path).map_err(|e| e.to_string())
+    workbook.save(path).map_err(|e| e.to_string())?;
+    Ok(truncated_cells)
 }
