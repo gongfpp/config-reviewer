@@ -172,7 +172,9 @@ fn parse_json_result(file: &str, raw: &str) -> Option<FileResult> {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .trim()
-                        .to_string();
+                        .chars()
+                        .take(160)
+                        .collect::<String>();
                     let snippet = c
                         .get("snippet")
                         .and_then(Value::as_str)
