@@ -1,10 +1,19 @@
-# 配置评审台
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="112" alt="配置评审台应用图标">
+</p>
 
-内网 Windows 桌面端的**配置 / 文档评审工具**。上传混合发布包（ZIP）或扫描本地目录，自动识别
-Apollo / XXL-JOB / 星云 等来源，调用内网文本 LLM 网关做上线前评审，按模块分组给出结论并导出。
+<h1 align="center">配置评审台</h1>
 
-需求与技术决策见 [`docs/requirements.md`](docs/requirements.md)；界面设计稿见
-[`prototypes/reviewer-desktop/index.html`](prototypes/reviewer-desktop/index.html)。
+<p align="center"><strong>面向 Windows 内网环境的配置与发布资料评审工具</strong><br>
+扫描 ZIP 或本地目录，按模块审阅配置与文档，并导出结构化结论。</p>
+
+<p align="center">
+  <a href="docs/requirements.md">需求与技术决策</a> ·
+  <a href="docs/intranet-deployment.md">部署指南</a> ·
+  <a href="prototypes/reviewer-desktop/index.html">界面设计原型</a>
+</p>
+
+> **图片说明：**此处展示仓库内的应用图标；仓库没有真实运行界面截图。`prototypes/reviewer-desktop/index.html` 是设计原型，不代表当前应用的实机画面。
 
 ## 技术栈
 
