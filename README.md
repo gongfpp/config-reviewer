@@ -34,7 +34,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml # 回归测试
 
 Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https://github.com/gongfpp/config-reviewer-builds) 由 GitHub Actions 构建，内置完整 WebView2 离线安装器，并静态链接 MSVC CRT。交付物是 `ConfigReviewer-0.1.5-windows-x64-offline.zip`，含安装 EXE、独立主程序 EXE、安装说明、环境检查脚本及 SHA256 清单。运行端无需 Node、Rust、Office 或外网连接。源码仓库公开后，原有一次性 AES-GCM 构建输入流程继续可用。
 
-源码提交并通过本地检查后，可运行 `python3 scripts/dispatch-public-build.py`（需要已登录的 `gh` 与 Python `cryptography`）派发 public Windows 构建。脚本拒绝脏工作区和重叠构建，密钥仅通过 stdin 写入仓库 Secret；交付完成后删除临时输入和 Secret。Windows UI 验收依赖由 `scripts/package.json` 单独固定，不进入运行端。
+源码提交并通过本地检查后，可运行 `python3 scripts/dispatch-public-build.py`（需要已登录的 `gh` 与 Python `cryptography`）派发 public Windows 构建。脚本拒绝脏工作区，安装包构建使用每次独立的密钥；共用密钥的开发包构建拒绝重叠运行。密钥仅通过 stdin 写入仓库 Secret；交付完成后删除临时输入和 Secret。Windows UI 验收依赖由 `scripts/package.json` 单独固定，不进入运行端。
 
 安装、网关配置与文件支持范围见 [`docs/intranet-deployment.md`](docs/intranet-deployment.md)；本轮验证与待验收边界见 [`docs/compatibility-audit.md`](docs/compatibility-audit.md)；定时功能的体验目标与证据对应见 [体验验收记录](docs/scheduled-review-acceptance.md)。
 
