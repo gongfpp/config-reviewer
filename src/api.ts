@@ -77,7 +77,7 @@ export const summarizeSystem = (args: {
   });
 
 export const exportXlsx = (path: string, rows: ExportRow[]) =>
-  invoke<void>("export_xlsx", { path, rows });
+  invoke<number>("export_xlsx", { path, rows });
 
 export const saveTask = (args: {
   sourceType: string;

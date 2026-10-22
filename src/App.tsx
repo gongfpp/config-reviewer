@@ -607,8 +607,8 @@ export default function App() {
     });
     setExporting(true);
     try {
-      await api.exportXlsx(path, rows);
-      toast("已导出 Excel");
+      const truncated = await api.exportXlsx(path, rows);
+      toast(truncated > 0 ? `已导出 Excel；${truncated} 个单元格超出 Excel 上限，已截断` : "已导出 Excel");
     } catch (e) {
       toast(String(e));
     } finally { setExporting(false); }
