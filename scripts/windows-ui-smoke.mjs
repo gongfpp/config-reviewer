@@ -178,7 +178,7 @@ async function verifyLargeScan() {
   await page.getByText('第 1 / 9 页 · 共 805 个文件', { exact: true }).waitFor();
   for (let i = 0; i < 8; i++) await page.getByRole('button', { name: '下一页', exact: true }).click();
   await page.getByText('第 9 / 9 页 · 共 805 个文件', { exact: true }).waitFor();
-  await page.getByText(`${moduleName}-0805.txt`, { exact: true }).waitFor();
+  await page.getByText(`${moduleName}-0805.txt`, { exact: true }).first().waitFor();
   assert.equal(await page.getByRole('row').count(), 6, 'Last page must show five files plus header');
   assert.equal(requestCount, baseline, '805-file local scan must not send model requests');
   await page.screenshot({ path: path.join(artifacts, 'scan-over-800.png'), fullPage: true });
