@@ -398,7 +398,9 @@ mod tests {
         assert!(result.updated);
         assert_ne!(result.before_commit, result.after_commit);
         assert_eq!(
-            fs::read_to_string(repo.target.join("new.txt")).unwrap(),
+            fs::read_to_string(repo.target.join("new.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "new remote file\n"
         );
         assert_eq!(
