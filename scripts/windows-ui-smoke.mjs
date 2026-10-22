@@ -145,16 +145,20 @@ function scheduleCard(name = scheduledName) {
 }
 async function schedules() { return page.evaluate(() => window.__TAURI_INTERNALS__.invoke('list_schedules')); }
 async function waitForSchedule(id, previousTaskId, state, timeout = 45000) {
-  const handle = await page.waitForFunction(async ({ id, previousTaskId, state }) => {
-    const jobs = await window.__TAURI_INTERNALS__.invoke('list_schedules');
-    const job = jobs.find(item => item.config.id === id);
+  const deadline = Date.now() + timeout;
+  let job;
+  do {
+    // Await each IPC response in Node; do not serialize a browser-side async
+    // polling handle through WebView2's CDP bridge.
+    job = (await schedules()).find(item => item.config.id === id);
     const run = job?.last_run;
-    if (!run || run.task_id === previousTaskId || run.state === 'running') return false;
-    return job;
-  }, { id, previousTaskId, state }, { polling: 250, timeout });
-  const job = await handle.jsonValue(); await handle.dispose();
-  assert.equal(job.last_run.state, state, job.last_run.message);
-  return job;
+    if (run && run.task_id !== previousTaskId && run.state !== 'running') {
+      assert.equal(run.state, state, run.message);
+      return job;
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  } while (Date.now() < deadline);
+  throw new Error(`Scheduled run did not finish: ${JSON.stringify(job?.last_run ?? null)}`);
 }
 function nativeWindow(action, hwnd) {
   const command = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ReviewerWindow { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n); }'; `;
