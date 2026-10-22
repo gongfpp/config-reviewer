@@ -185,7 +185,7 @@ async function verifyLargeScan() {
   largeScanEvidence = { discovered: 805, matched: 805, pages: 9, finalPageFiles: 5, gatewayRequests: requestCount - baseline };
 }
 async function verifySchedules() {
-  await page.getByRole('button', { name: /定时任务/ }).click();
+  await page.locator('aside.sidebar').getByRole('button', { name: /定时任务/ }).click();
   await page.getByRole('button', { name: '新建定时任务', exact: true }).click();
   await page.getByLabel('任务名称', { exact: true }).fill(scheduledName);
   await page.getByLabel('资料目录', { exact: true }).fill(checkout);
@@ -212,7 +212,7 @@ async function verifySchedules() {
   await page.getByText(scheduledFilename, { exact: true }).first().waitFor();
   await page.getByRole('button', { name: /评审历史/ }).click();
   await page.getByRole('row').filter({ hasText: checkout }).first().waitFor();
-  await page.getByRole('button', { name: /定时任务/ }).click();
+  await page.locator('aside.sidebar').getByRole('button', { name: /定时任务/ }).click();
   const beforeSkip = requestCount;
   await scheduleCard().getByRole('button', { name: '立即执行', exact: true }).click();
   job = await waitForSchedule(id, firstRun.task_id, 'unchanged');
@@ -223,7 +223,7 @@ async function verifySchedules() {
   job = (await schedules()).find(item => item.config.id === id);
   assert.equal(job.config.enabled, false); assert.equal(job.next_run_at, null);
   await stop(); await launch();
-  await page.getByRole('button', { name: /定时任务/ }).click();
+  await page.locator('aside.sidebar').getByRole('button', { name: /定时任务/ }).click();
   await scheduleCard().getByText('定时已暂停', { exact: true }).waitFor();
   const persisted = (await schedules()).find(item => item.config.id === id);
   assert.equal(persisted.last_run.task_id, job.last_run.task_id);
@@ -231,7 +231,7 @@ async function verifySchedules() {
   await scheduleCard().getByRole('button', { name: '启用', exact: true }).click();
   await scheduleCard().getByText('定时已启用', { exact: true }).waitFor();
   await verifyLargeScan();
-  await page.getByRole('button', { name: /定时任务/ }).click();
+  await page.locator('aside.sidebar').getByRole('button', { name: /定时任务/ }).click();
   await scheduleCard().getByRole('button', { name: '编辑', exact: true }).click();
   await page.getByLabel('执行间隔（分钟）', { exact: true }).fill('1');
   await page.getByRole('button', { name: '保存任务', exact: true }).click();
@@ -239,7 +239,7 @@ async function verifySchedules() {
   // Close the native window and let a real timer tick trigger Git + review
   // in the tray. No run_schedule_now call is made for this last run.
   await publishFixture(3);
-  await page.getByRole('button', { name: /定时任务/ }).click();
+  await page.locator('aside.sidebar').getByRole('button', { name: /定时任务/ }).click();
   const windowState = nativeWindow('close');
   assert.equal(windowState.visible, false, 'Native close must hide the main window');
   assert.equal(windowState.running, true, 'Closing the window must keep the scheduler process running');
@@ -258,7 +258,7 @@ async function verifySchedules() {
   assert.equal(stillRunning, false, 'Fully terminated application must have no scheduler process');
   scheduleEvidence.fullyExitedProcessAbsent = true;
   await launch();
-  await page.getByRole('button', { name: /定时任务/ }).click();
+  await page.locator('aside.sidebar').getByRole('button', { name: /定时任务/ }).click();
   await scheduleCard().getByRole('button', { name: '删除', exact: true }).click();
   await scheduleCard().getByRole('button', { name: '确认删除', exact: true }).click();
   await scheduleCard().waitFor({ state: 'detached' });
