@@ -13,7 +13,13 @@
   <a href="prototypes/reviewer-desktop/index.html">界面设计原型</a>
 </p>
 
-> **图片说明：**此处展示仓库内的应用图标；仓库没有真实运行界面截图。`prototypes/reviewer-desktop/index.html` 是设计原型，不代表当前应用的实机画面。
+以下为 Windows 已安装版 0.1.5 的真实运行截图，使用虚构文件与本地模拟模型服务。桌面界面、Git 拉取、文件处理和历史保存均由实际应用执行；截图不代表真实内网模型的评审质量。
+
+![配置评审台 Windows 运行界面：两个文件评审完成，按模块展示结论并保存历史](docs/images/windows-review-results.png)
+
+![定时任务运行界面：Git 已更新，自动评审一个文件并显示完成结果与下次执行时间](docs/images/windows-scheduled-review.png)
+
+截图来源与各项体验的验证范围见 [定时功能验收记录](docs/scheduled-review-acceptance.md)。
 
 ## 技术栈
 
