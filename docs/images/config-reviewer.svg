@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="配置评审台：文档与核对标记">
+  <rect x="48" y="48" width="928" height="928" rx="208" fill="#1c2735"/>
+  <path d="M276 216h314l158 158v434H276z" fill="#f9f6ed"/>
+  <path d="M590 216v158h158" fill="#d4bc72"/>
+  <path d="M354 442h200M354 526h130M354 610h90" fill="none" stroke="#73808c" stroke-width="38" stroke-linecap="round"/>
+  <circle cx="672" cy="686" r="168" fill="#b08d33" stroke="#1c2735" stroke-width="24"/>
+  <path d="m594 686 52 54 103-119" fill="none" stroke="#fffdf8" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

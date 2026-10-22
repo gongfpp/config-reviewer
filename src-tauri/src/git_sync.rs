@@ -332,14 +332,16 @@ mod tests {
         target: PathBuf,
     }
     fn git_ok(path: &Path, args: &[&str]) {
+        // A real empty file works on Windows too; Git for Windows rejects NUL
+        // as GIT_CONFIG_GLOBAL on some releases.
+        let isolated = tempfile::tempdir().unwrap();
+        let empty_config = isolated.path().join("empty-git-config");
+        fs::write(&empty_config, "").unwrap();
         let output = Command::new("git")
             .current_dir(path)
             .args(args)
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env(
-                "GIT_CONFIG_GLOBAL",
-                if cfg!(windows) { "NUL" } else { "/dev/null" },
-            )
+            .env("GIT_CONFIG_GLOBAL", &empty_config)
             .output()
             .unwrap();
         assert!(

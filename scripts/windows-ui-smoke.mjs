@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 
 const executable = process.argv[2];
 if (!executable) throw new Error('Expected installed EXE path');
-const root = await mkdtemp(path.join(tmpdir(), 'reviewer-ui-'));
+const root = await mkdtemp(path.join(process.env.RUNNER_TEMP || tmpdir(), 'reviewer-ui-'));
 const inputs = path.join(root, '中文发布包'); await mkdir(inputs);
 const moduleName = '阿波罗验收';
 const docName = `${moduleName}操作手册.DOC`;

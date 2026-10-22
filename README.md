@@ -1,5 +1,7 @@
 # 配置评审台
 
+<img src="docs/images/config-reviewer.svg" width="88" height="88" alt="配置评审台应用图标：文档与核对标记" />
+
 内网 Windows 桌面端的**配置 / 文档评审工具**。上传混合发布包（ZIP）或扫描本地目录，自动识别
 Apollo / XXL-JOB / 星云 等来源，调用内网文本 LLM 网关做上线前评审，按模块分组给出结论并导出。
 
@@ -27,7 +29,7 @@ Windows 离线安装包在 public 构建仓库 [`config-reviewer-builds`](https:
 
 源码提交并通过本地检查后，可运行 `python3 scripts/dispatch-public-build.py`（需要已登录的 `gh` 与 Python `cryptography`）派发 public Windows 构建。脚本拒绝脏工作区和重叠构建，密钥仅通过 stdin 写入仓库 Secret；交付完成后删除临时输入和 Secret。Windows UI 验收依赖由 `scripts/package.json` 单独固定，不进入运行端。
 
-安装、网关配置与文件支持范围见 [`docs/intranet-deployment.md`](docs/intranet-deployment.md)；本轮验证与待验收边界见 [`docs/compatibility-audit.md`](docs/compatibility-audit.md)。
+安装、网关配置与文件支持范围见 [`docs/intranet-deployment.md`](docs/intranet-deployment.md)；本轮验证与待验收边界见 [`docs/compatibility-audit.md`](docs/compatibility-audit.md)；定时功能的体验目标与证据对应见 [体验验收记录](docs/scheduled-review-acceptance.md)。
 
 ## 功能状态
 
